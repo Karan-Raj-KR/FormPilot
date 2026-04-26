@@ -1,158 +1,256 @@
-# Form-Fill-AI 🤖
+<div align="center">
 
+# 🤖 FormPilot
 
-	⁠AI-powered Chrome extension that scans web forms and fills them intelligently using your profile data.
+### The AI-powered Chrome Extension that actually understands your forms.
 
----
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/Karan-Raj-KR/FormPilot-)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-brightgreen?style=for-the-badge)](https://developer.chrome.com/docs/extensions/mv3/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-## What it does 📕
+**Stop typing. Start doing.**
 
-Form-Fill-AI detects form fields on any webpage, sends them to an AI model with your saved profile, and fills them with contextually accurate values — including cover letters, dropdowns, and multi-step forms.
+*FormPilot scans any web form, understands its context using LLMs, and fills every field intelligently — from your name to a 500-word cover letter.*
 
----
-
-## Features 🚀
-
-•⁠  ⁠*Multi-provider AI* — OpenAI, Anthropic, Gemini, Groq (switch anytime)
-•⁠  ⁠*Smart field detection* — 5-layer label extraction, 9 field categories
-•⁠  ⁠*Per-field confidence scores* — know what the AI is uncertain about
-•⁠  ⁠*Profile system* — multiple profiles (Personal, Work, Dev) with tone & length preferences
-•⁠  ⁠*Raw info field* — paste your full resume, AI mines it for any field
-•⁠  ⁠*Fill history* — every session logged by domain with full drill-down
-•⁠  ⁠*Cross-device sync* — profiles synced via ⁠ chrome.storage.sync ⁠
-•⁠  ⁠*Google OAuth* — sign in to enable cloud sync
-•⁠  ⁠*Visual feedback* — highlight, fill, error states injected into host pages
+</div>
 
 ---
 
-## Supported AI Providers ⚙️
+## 🧠 The Problem
 
-| Provider  | Default Model                  | Alternatives                              |
-|-----------|-------------------------------|-------------------------------------------|
-| OpenAI    | ⁠ gpt-4o ⁠                      | ⁠ gpt-4o-mini ⁠, ⁠ gpt-4-turbo ⁠             |
-| Anthropic | ⁠ claude-3-7-sonnet-20250219 ⁠  | ⁠ claude-3-5-sonnet ⁠, ⁠ claude-3-5-haiku ⁠  |
-| Gemini    | ⁠ gemini-2.5-flash ⁠            | ⁠ gemini-2.0-flash ⁠                        |
-| Groq      | ⁠ llama-3.3-70b-versatile ⁠     | ⁠ mixtral-8x7b-32768 ⁠                      |
+Every developer, student, and professional wastes hours per week filling repetitive web forms — job applications, hackathon registrations, surveys, checkout pages, onboarding flows.
 
-All providers use ⁠ temperature: 0.3 ⁠ for consistent, accurate outputs.
+**Browser autofill is dumb.** It pattern-matches field names. It fails on React/Vue apps. It can't write your cover letter. It has zero context.
+
+**FormPilot is different.**
 
 ---
 
-## How it works 📕
+## ⚡ What Makes It Different
 
-
-User clicks Scan
-  └── Popup → Content Script: SCAN_FIELDS
-        └── DOM scanner detects fields (input, textarea, select)
-              └── Returns DetectedField[] with label, type, selector, category
-
-User clicks Review & Auto-fill
-  └── Popup → Background: GENERATE_FILLS
-        └── Builds prompt with profile data + field metadata
-              └── Calls AI provider API
-                    └── Returns { suggestions: [{ index, value, confidence }] }
-
-User clicks Fill All
-  └── Popup → Content Script: FILL_FIELD (per field, 150ms apart)
-        └── Finds element via data-formfill-id → CSS selector → fallback
-              └── Fires native setter + input/change/blur events
-                    └── Green glow animation on success
-
+| Feature | Browser Autofill | FormPilot |
+|--------|-----------------|-------------|
+| Understands field *context* | ❌ | ✅ Uses LLM |
+| Fills essay / textarea fields | ❌ | ✅ Generates content |
+| Works on React / Vue SPAs | ❌ Often breaks | ✅ Native setter bypass |
+| Supports dropdowns semantically | ❌ | ✅ Matches by meaning |
+| Multiple profiles (Personal/Work) | ❌ | ✅ |
+| Confidence scoring per field | ❌ | ✅ |
+| Payment vault + Password vault | ❌ | ✅ |
+| Your choice of AI model | ❌ | ✅ GPT-4o, Claude, Gemini, Groq |
+| Zero data sent to any server | ❌ | ✅ 100% local |
 
 ---
 
-## Architecture 🏛️
+## 🎬 Demo
 
-
-Form-Fill-AI/
-├── src/
-│   ├── background/index.ts      ← Service worker: AI calls + prompt builder
-│   ├── content/
-│   │   ├── index.ts             ← DOM scanner + field filler + MutationObserver
-│   │   └── styles.css           ← Visual feedback injected into host pages
-│   ├── popup/
-│   │   ├── App.tsx              ← Root component, router, state
-│   │   └── pages/
-│   │       ├── Dashboard.tsx    ← Onboarding (3-step checklist)
-│   │       ├── Home.tsx         ← Scan + field category grid
-│   │       ├── Preview.tsx      ← AI generation + per-field edit + fill
-│   │       ├── Profiles.tsx     ← Create/edit/switch profiles
-│   │       ├── Settings.tsx     ← API key + model + behavior toggles
-│   │       └── History.tsx      ← Past sessions with drill-down
-│   └── shared/
-│       ├── types.ts             ← TypeScript interfaces
-│       ├── constants.ts         ← Defaults, models, categories
-│       ├── storage.ts           ← Chrome storage + localStorage fallback
-│       ├── auth.ts              ← Google OAuth
-│       └── sync.ts              ← Cross-device profile sync
-├── public/manifest.json         ← Chrome Extension MV3 config
-└── vite.config.ts
-
+> *Demo video link coming soon — see the extension in action on Google Forms and job portals.*
 
 ---
 
-## Build System ⚙️
+## 📸 Screenshots
 
-Two-stage pipeline:
-
-*Stage 1 — Vite*
-•⁠  ⁠Builds the React popup app
-•⁠  ⁠Obfuscates all ⁠ .ts/.tsx ⁠ files (base64+RC4 string encoding, control flow flattening, dead code injection)
-
-*Stage 2 — esbuild*
-•⁠  ⁠⁠ content.ts ⁠ → ⁠ dist/content.js ⁠ (IIFE, fully obfuscated)
-•⁠  ⁠⁠ background.ts ⁠ → ⁠ dist/background.js ⁠ (IIFE, minified only)
-  - Chrome MV3 service workers reject obfuscation (error code 15) — background is minified only
-
-⁠ bash
-npm run build
- ⁠
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>Dashboard</b></td>
+<td align="center"><b>Scan Page</b></td>
+<td align="center"><b>Profiles</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/dashboard.png" width="220"/></td>
+<td><img src="docs/screenshots/scan.png" width="220"/></td>
+<td><img src="docs/screenshots/profiles.png" width="220"/></td>
+</tr>
+<tr>
+<td align="center"><b>Vault</b></td>
+<td align="center"><b>History</b></td>
+<td align="center"><b>Settings</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/vault.png" width="220"/></td>
+<td><img src="docs/screenshots/history.png" width="220"/></td>
+<td><img src="docs/screenshots/settings.png" width="220"/></td>
+</tr>
+</table>
+</div>
 
 ---
 
-## Installation (Development)
+## 🏗️ Architecture
 
-⁠ bash
-git clone https://github.com/Karan-Raj-KR/form-fill-ai
-cd form-fill-ai
+FormPilot is a **Manifest V3** Chrome Extension with 3 isolated layers:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    POPUP (React SPA)                     │
+│  Dashboard · Scan · Preview · Profiles · Vault · History │
+└──────────────┬──────────────────────┬───────────────────┘
+               │ chrome.runtime       │ chrome.tabs
+               ▼                      ▼
+┌──────────────────────┐  ┌───────────────────────────────┐
+│  BACKGROUND WORKER   │  │      CONTENT SCRIPT           │
+│                      │  │                               │
+│  · Builds AI prompt  │  │  · Scans DOM (10-layer label  │
+│  · Calls AI API      │  │    extraction strategy)       │
+│  · Parses response   │  │  · Injects values             │
+│  · 4 providers       │  │  · React/Vue-safe native      │
+│    (OpenAI, Claude,  │  │    setter bypass              │
+│     Gemini, Groq)    │  │  · Visual feedback CSS        │
+└──────────────────────┘  └───────────────────────────────┘
+```
+
+### How a Fill Works
+
+```
+1. User clicks "Scan Page"
+      → Content script queries all input/textarea/select/ARIA elements
+      → 10-priority label extraction (aria-label → fieldset/legend → sibling text → ...)
+      → Fields categorized: personal / contact / address / professional / essay / ...
+      → Returns DetectedField[] with selector, label, type, confidence
+
+2. User clicks "Review & Auto-fill"
+      → Background builds structured prompt with profile data + field list
+      → AI returns { suggestions: [{ index, value, confidence }] }
+      → Payment fields → matched from Vault's default card
+      → Credential fields → matched from password vault by domain
+
+3. User clicks "Auto-Fill All Forms"
+      → Each field: focus → native setter → input/change/blur events fired
+      → React synthetic event system triggered correctly
+      → Green glow animation on filled fields
+      → History entry logged
+```
+
+---
+
+## 🔐 Privacy & Security
+
+- **Zero telemetry.** No analytics. No tracking.
+- **API keys stored locally** in `chrome.storage.local` — sandboxed to this extension.
+- **API calls go directly** from your browser to the AI provider. No relay server.
+- **Keys sanitized** before sending (strips hidden unicode characters).
+- **Message validation** — background/content scripts reject any message not from `chrome.runtime.id`.
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| UI | React 18 + TypeScript |
+| Styling | TailwindCSS 3 + Custom glassmorphism design system |
+| Animation | Framer Motion |
+| Icons | Lucide React |
+| Popup bundler | Vite 5 |
+| Content/BG bundler | esbuild |
+| Storage | chrome.storage.local (localStorage fallback in dev) |
+| AI Providers | OpenAI, Anthropic Claude, Google Gemini, Groq |
+| Extension standard | Chrome Manifest V3 |
+
+---
+
+## 🚀 Installation (Development)
+
+```bash
+# 1. Clone
+git clone https://github.com/Karan-Raj-KR/FormPilot-.git
+cd FormPilot-
+
+# 2. Install dependencies
 npm install
+
+# 3. Build
 npm run build
- ⁠
+# This runs: vite build (popup) + esbuild (content + background)
 
-1.⁠ ⁠Open ⁠ chrome://extensions ⁠
-2.⁠ ⁠Enable *Developer mode*
-3.⁠ ⁠Click *Load unpacked* → select the ⁠ dist/ ⁠ folder
-
----
-
-## Setup
-
-1.⁠ ⁠Go to *Settings* → enter your AI provider API key
-2.⁠ ⁠Go to *Profiles* → fill in your info (or paste your resume in Raw Info)
-3.⁠ ⁠Navigate to any form → open the extension → click *Scan*
+# 4. Load in Chrome
+# → Open chrome://extensions
+# → Enable "Developer mode" (top right)
+# → Click "Load unpacked"
+# → Select the /dist folder
+```
 
 ---
 
-## Privacy 🔐
+## 🔑 Setup (First Use)
 
-•⁠  ⁠API keys are stored locally in ⁠ chrome.storage.local ⁠ only — never transmitted to our servers
-•⁠  ⁠Profile data leaves your device only to call the AI provider you configured
-•⁠  ⁠Fill history is stored locally (max 100 entries)
-•⁠  ⁠Cloud sync (optional) uses Chrome's native ⁠ chrome.storage.sync ⁠
-
----
-
-## Tech Stack
-
-•⁠  ⁠*React + TypeScript* — popup UI
-•⁠  ⁠*Vite* — build tooling
-•⁠  ⁠*esbuild* — content/background script bundling
-•⁠  ⁠*Chrome Extension MV3* — extension platform
-•⁠  ⁠*chrome.identity* — Google OAuth
-•⁠  ⁠*javascript-obfuscator* — IP protection
+1. Open the extension → click **Settings**
+2. Choose your AI provider (Groq is free to start)
+3. Paste your API key (stored locally, never leaves your browser)
+4. Go to **Profiles** → fill in your info (or paste your entire resume in "Raw Info")
+5. Navigate to any form → click **Scan** → click **Auto-Fill**
 
 ---
 
-## License
+## 🤖 Supported AI Providers
 
-MIT
+| Provider | Default Model | Speed | Cost |
+|----------|--------------|-------|------|
+| **Groq** (Llama 3.3 70B) | llama-3.3-70b-versatile | ⚡ Fastest | Free tier |
+| **Google Gemini** | gemini-2.5-flash | ⚡ Fast | Free tier |
+| **OpenAI** | gpt-4o | 🔵 Best accuracy | Paid |
+| **Anthropic Claude** | claude-3-7-sonnet | 🔵 Best reasoning | Paid |
+
+> All providers use `temperature: 0.3` for consistent, accurate fills.
+
+---
+
+## 📁 Project Structure
+
+```
+FormPilot/
+├── src/
+│   ├── background/index.ts     ← Service worker: AI calls + prompt builder
+│   ├── content/
+│   │   ├── index.ts            ← DOM scanner + field filler + MutationObserver
+│   │   └── styles.css          ← Visual feedback (green glow, purple highlights)
+│   ├── popup/
+│   │   ├── App.tsx             ← Root component + state
+│   │   └── pages/
+│   │       ├── Dashboard.tsx   ← Onboarding guide
+│   │       ├── Home.tsx        ← Scan + field category grid
+│   │       ├── Preview.tsx     ← AI generation + per-field editing + fill
+│   │       ├── Profiles.tsx    ← Create/edit/switch profiles
+│   │       ├── Settings.tsx    ← API key + model + toggles
+│   │       └── History.tsx     ← Past fill sessions
+│   └── shared/
+│       ├── types.ts            ← All TypeScript interfaces
+│       ├── constants.ts        ← Defaults, model lists, storage keys
+│       ├── storage.ts          ← Chrome storage abstraction
+│       ├── auth.ts             ← Google OAuth
+│       └── sync.ts             ← Cross-device profile backup
+├── public/manifest.json        ← Chrome Extension MV3 config
+├── vite.config.ts
+└── build-scripts.mjs           ← esbuild stage for content + background
+```
+
+---
+
+## 👥 Team
+
+Built with ☕ and zero sleep at **[Hackathon Name]**
+
+| | Name | Role |
+|-|------|------|
+| 👨‍💻 | **Karan Raj** | Extension architecture, content script, build system |
+| 👨‍💻 | **Saagnik** | AI integration, background service worker, prompt engineering |
+| 👨‍💻 | **Havinash** | Popup UI, profiles, vault, design system |
+
+---
+
+## 📄 License
+
+MIT © 2025 FormPilot Team
+
+---
+
+<div align="center">
+
+**If you've ever rage-quit a form, this is for you.**
+
+⭐ Star this repo if it saved you time
+
+</div>
