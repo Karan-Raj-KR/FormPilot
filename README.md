@@ -1,1 +1,256 @@
-# FormFill AI \n\n**FormFill AI** is a smart, AI-powered Chrome extension that intelligently auto-fills web forms using LLMs like Claude or ChatGPT. It allows you to create and manage multiple profiles, extract contextual form fields from any web page, and seamlessly inject AI-generated data into those forms.\n\n## 🌟 Features\n\n- **Intelligent Auto-Fill:** Leverages LLMs to understand form fields contextually and generate appropriate responses based on your active profile.\n- **Multi-Profile Management:** Create, edit, and switch between different user profiles (e.g., Personal, Professional, Developer) to fill forms with the correct context.\n- **Privacy-Focused:** API keys and user profiles are stored securely in your browser's local storage (`chrome.storage.local`). They are never saved on an external server.\n- **Premium UI:** Features an beautiful React-based popup with smooth animations and intuitive user flows.\n- **Smart DOM Injection:** Automatically detects robust CSS selectors and gracefully injects form values, handling various input types including modern React/Vue-driven inputs.\n\n## 🚀 Installation (Unpacked Extension)\n\nTo use this extension, you need to load it into Chrome as an 'unpacked extension'.\n\n### Prerequisites\n- Node.js (v18 or higher recommended)\n- npm or yarn\n\n### Build Steps\n\n1. **Clone or Download the Repository**\n   Ensure you have the project on your local machine.\n\n2. **Install Dependencies**\n   Navigate into the project folder (`formfill-ai`) and run:\n   ```bash\n   npm install\n   ```\n\n3. **Build the Extension**\n   Run the build script to compile the React code and service workers:\n   ```bash\n   npm run build\n   ```\n   *This will generate a `dist` folder containing the compiled extension.* \n\n### Load into Chrome\n\n1. Open Google Chrome and navigate to `chrome://extensions/`.\n2. Enable **Developer mode** by clicking the toggle switch in the top right corner.\n3. Click the **Load unpacked** button in the top left.\n4. Select the `dist` folder that was generated in the `formfill-ai` repository.\n5. The FormFill AI extension should now appear in your list of active extensions! Pin it to your toolbar for easy access.\n\n## 💡 How to Use\n\n### 1. Setup Your API Key\n- Click the FormFill AI extension icon in your toolbar.\n- Go to the **Settings** tab (gear icon).\n- Choose your preferred AI Provider (OpenAI or Anthropic/Gemini) if available, and enter your API key.\n- Click **Save Settings**.\n*Note: The key is kept securely on your local device.*\n\n### 2. Create a Profile\n- Go to the **Profiles** tab.\n- Click **Add Profile**.\n- Fill in details you want the AI to know about you (e.g., Name, Email, Address, Job Title, Professional Summary, etc.) and save it.\n- Select a profile to set it as **Active**.\n\n### 3. Auto-Fill a Form\n- Navigate to any web page containing a form.\n- Open the FormFill AI popup.\n- Go to the **Auto-Fill** tab.\n- Click **Scan Page**. The extension will find all visible form fields on the page.\n- Review the detected fields. \n- Click **Generate & Fill Form**. The AI will generate appropriate data based on your active profile and automatically inject it into the page's input fields!\n\n## 🛠️ Development\n\nThe project uses:\n- **Vite** as the bundler\n- **React 18** for the UI\n- **TailwindCSS** for styling\n- **TypeScript** for type safety\n\nTo run the dev server during UI development (note: Chrome Extension APIs like `chrome.runtime` will not be available in standard browser view):\n```bash\nnpm run dev\n```\n\nIf you modify `content.ts` or `background.ts`, ensure you run `npm run build` again and refresh the extension in `chrome://extensions/` by clicking the reload icon on the extension card.\n
+<div align="center">
+
+# 🤖 FormPilot
+
+### The AI-powered Chrome Extension that actually understands your forms.
+
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/Karan-Raj-KR/FormPilot-)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-brightgreen?style=for-the-badge)](https://developer.chrome.com/docs/extensions/mv3/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+
+**Stop typing. Start doing.**
+
+*FormPilot scans any web form, understands its context using LLMs, and fills every field intelligently — from your name to a 500-word cover letter.*
+
+</div>
+
+---
+
+## 🧠 The Problem
+
+Every developer, student, and professional wastes hours per week filling repetitive web forms — job applications, hackathon registrations, surveys, checkout pages, onboarding flows.
+
+**Browser autofill is dumb.** It pattern-matches field names. It fails on React/Vue apps. It can't write your cover letter. It has zero context.
+
+**FormPilot is different.**
+
+---
+
+## ⚡ What Makes It Different
+
+| Feature | Browser Autofill | FormPilot |
+|--------|-----------------|-------------|
+| Understands field *context* | ❌ | ✅ Uses LLM |
+| Fills essay / textarea fields | ❌ | ✅ Generates content |
+| Works on React / Vue SPAs | ❌ Often breaks | ✅ Native setter bypass |
+| Supports dropdowns semantically | ❌ | ✅ Matches by meaning |
+| Multiple profiles (Personal/Work) | ❌ | ✅ |
+| Confidence scoring per field | ❌ | ✅ |
+| Payment vault + Password vault | ❌ | ✅ |
+| Your choice of AI model | ❌ | ✅ GPT-4o, Claude, Gemini, Groq |
+| Zero data sent to any server | ❌ | ✅ 100% local |
+
+---
+
+## 🎬 Demo
+
+> *Demo video link coming soon — see the extension in action on Google Forms and job portals.*
+
+---
+
+## 📸 Screenshots
+
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>Dashboard</b></td>
+<td align="center"><b>Scan Page</b></td>
+<td align="center"><b>Profiles</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/dashboard.png" width="220"/></td>
+<td><img src="docs/screenshots/scan.png" width="220"/></td>
+<td><img src="docs/screenshots/profiles.png" width="220"/></td>
+</tr>
+<tr>
+<td align="center"><b>Vault</b></td>
+<td align="center"><b>History</b></td>
+<td align="center"><b>Settings</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/vault.png" width="220"/></td>
+<td><img src="docs/screenshots/history.png" width="220"/></td>
+<td><img src="docs/screenshots/settings.png" width="220"/></td>
+</tr>
+</table>
+</div>
+
+---
+
+## 🏗️ Architecture
+
+FormPilot is a **Manifest V3** Chrome Extension with 3 isolated layers:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    POPUP (React SPA)                     │
+│  Dashboard · Scan · Preview · Profiles · Vault · History │
+└──────────────┬──────────────────────┬───────────────────┘
+               │ chrome.runtime       │ chrome.tabs
+               ▼                      ▼
+┌──────────────────────┐  ┌───────────────────────────────┐
+│  BACKGROUND WORKER   │  │      CONTENT SCRIPT           │
+│                      │  │                               │
+│  · Builds AI prompt  │  │  · Scans DOM (10-layer label  │
+│  · Calls AI API      │  │    extraction strategy)       │
+│  · Parses response   │  │  · Injects values             │
+│  · 4 providers       │  │  · React/Vue-safe native      │
+│    (OpenAI, Claude,  │  │    setter bypass              │
+│     Gemini, Groq)    │  │  · Visual feedback CSS        │
+└──────────────────────┘  └───────────────────────────────┘
+```
+
+### How a Fill Works
+
+```
+1. User clicks "Scan Page"
+      → Content script queries all input/textarea/select/ARIA elements
+      → 10-priority label extraction (aria-label → fieldset/legend → sibling text → ...)
+      → Fields categorized: personal / contact / address / professional / essay / ...
+      → Returns DetectedField[] with selector, label, type, confidence
+
+2. User clicks "Review & Auto-fill"
+      → Background builds structured prompt with profile data + field list
+      → AI returns { suggestions: [{ index, value, confidence }] }
+      → Payment fields → matched from Vault's default card
+      → Credential fields → matched from password vault by domain
+
+3. User clicks "Auto-Fill All Forms"
+      → Each field: focus → native setter → input/change/blur events fired
+      → React synthetic event system triggered correctly
+      → Green glow animation on filled fields
+      → History entry logged
+```
+
+---
+
+## 🔐 Privacy & Security
+
+- **Zero telemetry.** No analytics. No tracking.
+- **API keys stored locally** in `chrome.storage.local` — sandboxed to this extension.
+- **API calls go directly** from your browser to the AI provider. No relay server.
+- **Keys sanitized** before sending (strips hidden unicode characters).
+- **Message validation** — background/content scripts reject any message not from `chrome.runtime.id`.
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| UI | React 18 + TypeScript |
+| Styling | TailwindCSS 3 + Custom glassmorphism design system |
+| Animation | Framer Motion |
+| Icons | Lucide React |
+| Popup bundler | Vite 5 |
+| Content/BG bundler | esbuild |
+| Storage | chrome.storage.local (localStorage fallback in dev) |
+| AI Providers | OpenAI, Anthropic Claude, Google Gemini, Groq |
+| Extension standard | Chrome Manifest V3 |
+
+---
+
+## 🚀 Installation (Development)
+
+```bash
+# 1. Clone
+git clone https://github.com/Karan-Raj-KR/FormPilot-.git
+cd FormPilot-
+
+# 2. Install dependencies
+npm install
+
+# 3. Build
+npm run build
+# This runs: vite build (popup) + esbuild (content + background)
+
+# 4. Load in Chrome
+# → Open chrome://extensions
+# → Enable "Developer mode" (top right)
+# → Click "Load unpacked"
+# → Select the /dist folder
+```
+
+---
+
+## 🔑 Setup (First Use)
+
+1. Open the extension → click **Settings**
+2. Choose your AI provider (Groq is free to start)
+3. Paste your API key (stored locally, never leaves your browser)
+4. Go to **Profiles** → fill in your info (or paste your entire resume in "Raw Info")
+5. Navigate to any form → click **Scan** → click **Auto-Fill**
+
+---
+
+## 🤖 Supported AI Providers
+
+| Provider | Default Model | Speed | Cost |
+|----------|--------------|-------|------|
+| **Groq** (Llama 3.3 70B) | llama-3.3-70b-versatile | ⚡ Fastest | Free tier |
+| **Google Gemini** | gemini-2.5-flash | ⚡ Fast | Free tier |
+| **OpenAI** | gpt-4o | 🔵 Best accuracy | Paid |
+| **Anthropic Claude** | claude-3-7-sonnet | 🔵 Best reasoning | Paid |
+
+> All providers use `temperature: 0.3` for consistent, accurate fills.
+
+---
+
+## 📁 Project Structure
+
+```
+FormPilot/
+├── src/
+│   ├── background/index.ts     ← Service worker: AI calls + prompt builder
+│   ├── content/
+│   │   ├── index.ts            ← DOM scanner + field filler + MutationObserver
+│   │   └── styles.css          ← Visual feedback (green glow, purple highlights)
+│   ├── popup/
+│   │   ├── App.tsx             ← Root component + state
+│   │   └── pages/
+│   │       ├── Dashboard.tsx   ← Onboarding guide
+│   │       ├── Home.tsx        ← Scan + field category grid
+│   │       ├── Preview.tsx     ← AI generation + per-field editing + fill
+│   │       ├── Profiles.tsx    ← Create/edit/switch profiles
+│   │       ├── Settings.tsx    ← API key + model + toggles
+│   │       └── History.tsx     ← Past fill sessions
+│   └── shared/
+│       ├── types.ts            ← All TypeScript interfaces
+│       ├── constants.ts        ← Defaults, model lists, storage keys
+│       ├── storage.ts          ← Chrome storage abstraction
+│       ├── auth.ts             ← Google OAuth
+│       └── sync.ts             ← Cross-device profile backup
+├── public/manifest.json        ← Chrome Extension MV3 config
+├── vite.config.ts
+└── build-scripts.mjs           ← esbuild stage for content + background
+```
+
+---
+
+## 👥 Team
+
+Built with ☕ and zero sleep at **[Hackathon Name]**
+
+| | Name | Role |
+|-|------|------|
+| 👨‍💻 | **Karan Raj** | Extension architecture, content script, build system |
+| 👨‍💻 | **Saagnik** | AI integration, background service worker, prompt engineering |
+| 👨‍💻 | **Havinash** | Popup UI, profiles, vault, design system |
+
+---
+
+## 📄 License
+
+MIT © 2025 FormPilot Team
+
+---
+
+<div align="center">
+
+**If you've ever rage-quit a form, this is for you.**
+
+⭐ Star this repo if it saved you time
+
+</div>
