@@ -235,9 +235,9 @@ Built with ☕ and zero sleep at **[Hackathon Name]**
 
 | | Name | Role |
 |-|------|------|
-| 👨‍💻 | **Karan Raj** | Extension architecture, content script, build system |
-| 👨‍💻 | **Saagnik** | AI integration, background service worker, prompt engineering |
-| 👨‍💻 | **Havinash** | Popup UI, profiles, vault, design system |
+| 👨‍💻 | **Karan Raj** | 
+| 👨‍💻 | **Saagnik** | 
+| 👨‍💻 | **Havinash** | 
 
 ---
 
