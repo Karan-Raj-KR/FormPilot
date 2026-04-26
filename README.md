@@ -1,1 +1,158 @@
-# FormFill AI \n\n**FormFill AI** is a smart, AI-powered Chrome extension that intelligently auto-fills web forms using LLMs like Claude or ChatGPT. It allows you to create and manage multiple profiles, extract contextual form fields from any web page, and seamlessly inject AI-generated data into those forms.\n\n## 🌟 Features\n\n- **Intelligent Auto-Fill:** Leverages LLMs to understand form fields contextually and generate appropriate responses based on your active profile.\n- **Multi-Profile Management:** Create, edit, and switch between different user profiles (e.g., Personal, Professional, Developer) to fill forms with the correct context.\n- **Privacy-Focused:** API keys and user profiles are stored securely in your browser's local storage (`chrome.storage.local`). They are never saved on an external server.\n- **Premium UI:** Features an beautiful React-based popup with smooth animations and intuitive user flows.\n- **Smart DOM Injection:** Automatically detects robust CSS selectors and gracefully injects form values, handling various input types including modern React/Vue-driven inputs.\n\n## 🚀 Installation (Unpacked Extension)\n\nTo use this extension, you need to load it into Chrome as an 'unpacked extension'.\n\n### Prerequisites\n- Node.js (v18 or higher recommended)\n- npm or yarn\n\n### Build Steps\n\n1. **Clone or Download the Repository**\n   Ensure you have the project on your local machine.\n\n2. **Install Dependencies**\n   Navigate into the project folder (`formfill-ai`) and run:\n   ```bash\n   npm install\n   ```\n\n3. **Build the Extension**\n   Run the build script to compile the React code and service workers:\n   ```bash\n   npm run build\n   ```\n   *This will generate a `dist` folder containing the compiled extension.* \n\n### Load into Chrome\n\n1. Open Google Chrome and navigate to `chrome://extensions/`.\n2. Enable **Developer mode** by clicking the toggle switch in the top right corner.\n3. Click the **Load unpacked** button in the top left.\n4. Select the `dist` folder that was generated in the `formfill-ai` repository.\n5. The FormFill AI extension should now appear in your list of active extensions! Pin it to your toolbar for easy access.\n\n## 💡 How to Use\n\n### 1. Setup Your API Key\n- Click the FormFill AI extension icon in your toolbar.\n- Go to the **Settings** tab (gear icon).\n- Choose your preferred AI Provider (OpenAI or Anthropic/Gemini) if available, and enter your API key.\n- Click **Save Settings**.\n*Note: The key is kept securely on your local device.*\n\n### 2. Create a Profile\n- Go to the **Profiles** tab.\n- Click **Add Profile**.\n- Fill in details you want the AI to know about you (e.g., Name, Email, Address, Job Title, Professional Summary, etc.) and save it.\n- Select a profile to set it as **Active**.\n\n### 3. Auto-Fill a Form\n- Navigate to any web page containing a form.\n- Open the FormFill AI popup.\n- Go to the **Auto-Fill** tab.\n- Click **Scan Page**. The extension will find all visible form fields on the page.\n- Review the detected fields. \n- Click **Generate & Fill Form**. The AI will generate appropriate data based on your active profile and automatically inject it into the page's input fields!\n\n## 🛠️ Development\n\nThe project uses:\n- **Vite** as the bundler\n- **React 18** for the UI\n- **TailwindCSS** for styling\n- **TypeScript** for type safety\n\nTo run the dev server during UI development (note: Chrome Extension APIs like `chrome.runtime` will not be available in standard browser view):\n```bash\nnpm run dev\n```\n\nIf you modify `content.ts` or `background.ts`, ensure you run `npm run build` again and refresh the extension in `chrome://extensions/` by clicking the reload icon on the extension card.\n
+# Form-Fill-AI 🤖
+
+
+	⁠AI-powered Chrome extension that scans web forms and fills them intelligently using your profile data.
+
+---
+
+## What it does 📕
+
+Form-Fill-AI detects form fields on any webpage, sends them to an AI model with your saved profile, and fills them with contextually accurate values — including cover letters, dropdowns, and multi-step forms.
+
+---
+
+## Features 🚀
+
+•⁠  ⁠*Multi-provider AI* — OpenAI, Anthropic, Gemini, Groq (switch anytime)
+•⁠  ⁠*Smart field detection* — 5-layer label extraction, 9 field categories
+•⁠  ⁠*Per-field confidence scores* — know what the AI is uncertain about
+•⁠  ⁠*Profile system* — multiple profiles (Personal, Work, Dev) with tone & length preferences
+•⁠  ⁠*Raw info field* — paste your full resume, AI mines it for any field
+•⁠  ⁠*Fill history* — every session logged by domain with full drill-down
+•⁠  ⁠*Cross-device sync* — profiles synced via ⁠ chrome.storage.sync ⁠
+•⁠  ⁠*Google OAuth* — sign in to enable cloud sync
+•⁠  ⁠*Visual feedback* — highlight, fill, error states injected into host pages
+
+---
+
+## Supported AI Providers ⚙️
+
+| Provider  | Default Model                  | Alternatives                              |
+|-----------|-------------------------------|-------------------------------------------|
+| OpenAI    | ⁠ gpt-4o ⁠                      | ⁠ gpt-4o-mini ⁠, ⁠ gpt-4-turbo ⁠             |
+| Anthropic | ⁠ claude-3-7-sonnet-20250219 ⁠  | ⁠ claude-3-5-sonnet ⁠, ⁠ claude-3-5-haiku ⁠  |
+| Gemini    | ⁠ gemini-2.5-flash ⁠            | ⁠ gemini-2.0-flash ⁠                        |
+| Groq      | ⁠ llama-3.3-70b-versatile ⁠     | ⁠ mixtral-8x7b-32768 ⁠                      |
+
+All providers use ⁠ temperature: 0.3 ⁠ for consistent, accurate outputs.
+
+---
+
+## How it works 📕
+
+
+User clicks Scan
+  └── Popup → Content Script: SCAN_FIELDS
+        └── DOM scanner detects fields (input, textarea, select)
+              └── Returns DetectedField[] with label, type, selector, category
+
+User clicks Review & Auto-fill
+  └── Popup → Background: GENERATE_FILLS
+        └── Builds prompt with profile data + field metadata
+              └── Calls AI provider API
+                    └── Returns { suggestions: [{ index, value, confidence }] }
+
+User clicks Fill All
+  └── Popup → Content Script: FILL_FIELD (per field, 150ms apart)
+        └── Finds element via data-formfill-id → CSS selector → fallback
+              └── Fires native setter + input/change/blur events
+                    └── Green glow animation on success
+
+
+---
+
+## Architecture 🏛️
+
+
+Form-Fill-AI/
+├── src/
+│   ├── background/index.ts      ← Service worker: AI calls + prompt builder
+│   ├── content/
+│   │   ├── index.ts             ← DOM scanner + field filler + MutationObserver
+│   │   └── styles.css           ← Visual feedback injected into host pages
+│   ├── popup/
+│   │   ├── App.tsx              ← Root component, router, state
+│   │   └── pages/
+│   │       ├── Dashboard.tsx    ← Onboarding (3-step checklist)
+│   │       ├── Home.tsx         ← Scan + field category grid
+│   │       ├── Preview.tsx      ← AI generation + per-field edit + fill
+│   │       ├── Profiles.tsx     ← Create/edit/switch profiles
+│   │       ├── Settings.tsx     ← API key + model + behavior toggles
+│   │       └── History.tsx      ← Past sessions with drill-down
+│   └── shared/
+│       ├── types.ts             ← TypeScript interfaces
+│       ├── constants.ts         ← Defaults, models, categories
+│       ├── storage.ts           ← Chrome storage + localStorage fallback
+│       ├── auth.ts              ← Google OAuth
+│       └── sync.ts              ← Cross-device profile sync
+├── public/manifest.json         ← Chrome Extension MV3 config
+└── vite.config.ts
+
+
+---
+
+## Build System ⚙️
+
+Two-stage pipeline:
+
+*Stage 1 — Vite*
+•⁠  ⁠Builds the React popup app
+•⁠  ⁠Obfuscates all ⁠ .ts/.tsx ⁠ files (base64+RC4 string encoding, control flow flattening, dead code injection)
+
+*Stage 2 — esbuild*
+•⁠  ⁠⁠ content.ts ⁠ → ⁠ dist/content.js ⁠ (IIFE, fully obfuscated)
+•⁠  ⁠⁠ background.ts ⁠ → ⁠ dist/background.js ⁠ (IIFE, minified only)
+  - Chrome MV3 service workers reject obfuscation (error code 15) — background is minified only
+
+⁠ bash
+npm run build
+ ⁠
+
+---
+
+## Installation (Development)
+
+⁠ bash
+git clone https://github.com/Karan-Raj-KR/form-fill-ai
+cd form-fill-ai
+npm install
+npm run build
+ ⁠
+
+1.⁠ ⁠Open ⁠ chrome://extensions ⁠
+2.⁠ ⁠Enable *Developer mode*
+3.⁠ ⁠Click *Load unpacked* → select the ⁠ dist/ ⁠ folder
+
+---
+
+## Setup
+
+1.⁠ ⁠Go to *Settings* → enter your AI provider API key
+2.⁠ ⁠Go to *Profiles* → fill in your info (or paste your resume in Raw Info)
+3.⁠ ⁠Navigate to any form → open the extension → click *Scan*
+
+---
+
+## Privacy 🔐
+
+•⁠  ⁠API keys are stored locally in ⁠ chrome.storage.local ⁠ only — never transmitted to our servers
+•⁠  ⁠Profile data leaves your device only to call the AI provider you configured
+•⁠  ⁠Fill history is stored locally (max 100 entries)
+•⁠  ⁠Cloud sync (optional) uses Chrome's native ⁠ chrome.storage.sync ⁠
+
+---
+
+## Tech Stack
+
+•⁠  ⁠*React + TypeScript* — popup UI
+•⁠  ⁠*Vite* — build tooling
+•⁠  ⁠*esbuild* — content/background script bundling
+•⁠  ⁠*Chrome Extension MV3* — extension platform
+•⁠  ⁠*chrome.identity* — Google OAuth
+•⁠  ⁠*javascript-obfuscator* — IP protection
+
+---
+
+## License
+
+MIT
