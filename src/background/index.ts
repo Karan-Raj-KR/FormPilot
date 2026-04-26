@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────
-   FormFill AI — Background Service Worker
+   FormPilot — Background Service Worker
    Handles AI API calls and profile/history storage.
    ───────────────────────────────────────────────── */
 
@@ -272,7 +272,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ─── Extension install handler ───
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
-    console.log('FormFill AI installed successfully');
+    console.log('FormPilot installed successfully');
     chrome.tabs.create({ url: chrome.runtime.getURL('landing.html') });
   }
 });

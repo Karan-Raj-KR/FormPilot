@@ -1,5 +1,5 @@
 {
-  "name": "formfill-ai",
+  "name": "formpilot",
   "private": true,
   "version": "1.0.0",
   "description": "AI-powered Chrome extension that intelligently auto-fills web forms using Claude or ChatGPT",

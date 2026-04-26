@@ -49,9 +49,9 @@ export default function DashboardPage({ settings, setSettings, navigateTo, profi
           transition={{ type: 'spring', stiffness: 250, damping: 15 }}
           src="/icons/icon128.png"
           className="w-16 h-16 rounded-2xl shadow-[0_0_30px_rgba(14,165,233,0.5)] mb-2 hover:rotate-[0deg] hover:scale-110 transition-all duration-300"
-          alt="FormFill AI Logo"
+          alt="FormPilot Logo"
         />
-        <h2 className="text-2xl font-bold text-white tracking-tight">FormFill AI</h2>
+        <h2 className="text-2xl font-bold text-white tracking-tight">FormPilot</h2>
         <p className="text-xs text-muted-light max-w-[260px]">Your intelligent auto-filling assistant. Welcome to the future of browsing.</p>
       </motion.div>
 

@@ -333,7 +333,7 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs text-muted-light">Projects Highlights</label>
-                  <textarea className="glass-textarea" value={formData.data?.projects || ''} onChange={e => updateDataField('projects', e.target.value)} rows={3} placeholder="Built FormFill AI..." />
+                  <textarea className="glass-textarea" value={formData.data?.projects || ''} onChange={e => updateDataField('projects', e.target.value)} rows={3} placeholder="Built FormPilot..." />
                 </div>
               </div>
             )}

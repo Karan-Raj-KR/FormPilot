@@ -87,7 +87,7 @@ export default function App() {
       <header className="px-4 py-3 border-b border-[#27272a] flex items-center justify-between bg-black/20 backdrop-blur-md">
         <div className="flex items-center gap-2" onClick={() => navigateTo('dashboard')} style={{cursor: 'pointer'}}>
           <img src="/icons/icon48.png" className="w-6 h-6 rounded shadow-[0_0_10px_rgba(14,165,233,0.3)]" alt="Logo" />
-          <span className="font-semibold text-sm tracking-wide">FormFill <span className="text-primary-400">AI</span></span>
+          <span className="font-semibold text-sm tracking-wide">Form<span className="text-primary-400">Pilot</span></span>
         </div>
         
         {currentPage !== 'dashboard' && activeProfile && (

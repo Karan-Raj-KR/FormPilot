@@ -259,7 +259,7 @@ export default function SettingsPage({ settings, setSettings, profiles }: Settin
       </div>
 
       <div className="space-y-2 mt-auto pt-6 opacity-60 hover:opacity-100 transition-opacity">
-        <p className="text-[10px] text-center text-muted">FormFill AI v1.0.0</p>
+        <p className="text-[10px] text-center text-muted">FormPilot v1.0.0</p>
         <div className="flex justify-center gap-4 text-[10px] text-primary-400 font-medium">
           <a href="/privacy.html" target="_blank" rel="noreferrer" className="hover:underline">Privacy Policy</a>
           <a href="#" className="hover:underline">Documentation</a>

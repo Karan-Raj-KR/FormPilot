@@ -26,8 +26,8 @@ export default function Landing() {
       {/* Navbar */}
       <nav className="w-full max-w-6xl p-6 flex justify-between items-center z-10">
         <div className="flex items-center gap-3">
-          <img src="/icons/icon48.png" className="w-10 h-10 rounded-xl shadow-[0_0_20px_rgba(14,165,233,0.4)]" alt="FormFill AI Logo" />
-          <span className="font-bold text-xl tracking-wide">FormFill <span className="text-primary-400">AI</span></span>
+          <img src="/icons/icon48.png" className="w-10 h-10 rounded-xl shadow-[0_0_20px_rgba(14,165,233,0.4)]" alt="FormPilot Logo" />
+          <span className="font-bold text-xl tracking-wide">Form<span className="text-primary-400">Pilot</span></span>
         </div>
       </nav>
 
@@ -46,7 +46,7 @@ export default function Landing() {
           </h1>
           
           <p className="text-lg md:text-xl text-muted-light max-w-xl mx-auto md:mx-0 leading-relaxed">
-            FormFill AI understands context, remembers your profile data, and magically completes applications in a single click using Claude or ChatGPT.
+            FormPilot understands context, remembers your profile data, and magically completes applications in a single click using Claude or ChatGPT.
           </p>
 
           <div className="pt-4 flex flex-col sm:flex-row items-center gap-4 justify-center md:justify-start">
@@ -82,7 +82,7 @@ export default function Landing() {
                 </div>
                 <div>
                   <h4 className="font-semibold text-white">1. Open the Extension</h4>
-                  <p className="text-sm text-muted mt-1 leading-relaxed">Click the FormFill AI icon in your extensions toolbar and add your OpenAI/Claude key.</p>
+                  <p className="text-sm text-muted mt-1 leading-relaxed">Click the FormPilot icon in your extensions toolbar and add your OpenAI/Claude key.</p>
                 </div>
               </div>
 
@@ -102,7 +102,7 @@ export default function Landing() {
 
       {/* Footer */}
       <footer className="w-full p-6 text-center text-xs font-medium text-muted-dark z-10">
-        &copy; {new Date().getFullYear()} FormFill AI. All intelligence reserved.
+        &copy; {new Date().getFullYear()} FormPilot. All intelligence reserved.
       </footer>
     </div>
   );

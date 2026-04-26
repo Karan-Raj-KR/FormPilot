@@ -138,11 +138,11 @@ export const CATEGORY_CONFIG: Record<FieldCategory, { label: string; icon: strin
 
 // ─── Storage Keys ───
 export const STORAGE_KEYS = {
-  PROFILES: 'formfill_profiles',
-  SETTINGS: 'formfill_settings',
-  HISTORY: 'formfill_history',
-  PAYMENT_CARDS: 'formfill_payment_cards',
-  PASSWORDS: 'formfill_passwords',
+  PROFILES: 'formpilot_profiles',
+  SETTINGS: 'formpilot_settings',
+  HISTORY: 'formpilot_history',
+  PAYMENT_CARDS: 'formpilot_payment_cards',
+  PASSWORDS: 'formpilot_passwords',
 } as const;
 
 export const PAYMENT_FIELD_PATTERNS = {

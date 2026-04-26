@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────
-   FormFill AI — Content Script
+   FormPilot — Content Script
    Scans DOM for form fields, injects filled values.
    ───────────────────────────────────────────────── */
 
@@ -233,7 +233,7 @@ function scanFields() {
     }
 
     const fieldId = `ff-${index}-${Date.now()}`;
-    element.setAttribute('data-formfill-id', fieldId);
+    element.setAttribute('data-formpilot-id', fieldId);
 
     const generatedSelector = generateSelector(element);
 
@@ -265,7 +265,7 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
   let element: HTMLElement | null = null;
   
   if (fieldId) {
-    try { element = document.querySelector(`[data-formfill-id="${fieldId}"]`) as HTMLElement | null; } catch(e) {}
+    try { element = document.querySelector(`[data-formpilot-id="${fieldId}"]`) as HTMLElement | null; } catch(e) {}
   }
   if (!element) {
     try { element = document.querySelector(selector) as HTMLElement | null; } catch(e) {}
@@ -275,7 +275,7 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
   }
 
   if (!element) {
-    console.error('FormFill AI: Element not found on page. DOM may have changed.');
+    console.error('FormPilot: Element not found on page. DOM may have changed.');
     return false;
   }
 
@@ -363,8 +363,8 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
   }
 
   // Visual feedback
-  element.classList.add('formfill-ai-filled');
-  setTimeout(() => element.classList.remove('formfill-ai-filled'), 2000);
+  element.classList.add('formpilot-filled');
+  setTimeout(() => element.classList.remove('formpilot-filled'), 2000);
 
   return true;
 }
@@ -373,13 +373,13 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
 function highlightFields(selectors: string[]) {
   selectors.forEach((sel) => {
     const el = document.querySelector(sel);
-    if (el) el.classList.add('formfill-ai-highlight');
+    if (el) el.classList.add('formpilot-highlight');
   });
 }
 
 function clearHighlights() {
-  document.querySelectorAll('.formfill-ai-highlight, .formfill-ai-filled, .formfill-ai-scanning').forEach((el) => {
-    el.classList.remove('formfill-ai-highlight', 'formfill-ai-filled', 'formfill-ai-scanning');
+  document.querySelectorAll('.formpilot-highlight, .formpilot-filled, .formpilot-scanning').forEach((el) => {
+    el.classList.remove('formpilot-highlight', 'formpilot-filled', 'formpilot-scanning');
   });
 }
 

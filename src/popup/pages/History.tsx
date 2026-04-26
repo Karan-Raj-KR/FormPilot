@@ -86,7 +86,7 @@ export default function HistoryPage() {
             <HistoryIcon size={20} />
           </div>
           <h3 className="font-semibold mb-1">No history yet</h3>
-          <p className="text-xs text-muted-light">Forms you fill with FormFill AI will appear here for easy reuse.</p>
+          <p className="text-xs text-muted-light">Forms you fill with FormPilot will appear here for easy reuse.</p>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto pr-1 space-y-3 pb-4">
