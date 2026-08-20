@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Key, Bot, Settings2, Link2 } from 'lucide-react';
+import { Shield, Key, Bot, Settings2, Link2, RefreshCw, Brain } from 'lucide-react';
 import type { Settings, Profile, ProviderConfig } from '../../shared/types';
 import { saveSettings } from '../../shared/storage';
 import { PROVIDERS, getProviderConfig } from '../../shared/constants';
@@ -14,6 +14,11 @@ export default function SettingsPage({ settings, setSettings }: SettingsProps) {
   // Local state so typing in the key field doesn't write to storage per keystroke
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
   const [isSaved, setIsSaved] = useState(false);
+  // Model ids fetched live from the provider, so a model released today is
+  // usable today without shipping a new build.
+  const [liveModels, setLiveModels] = useState<Record<string, string[]>>({});
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalSettings(settings);
@@ -44,8 +49,24 @@ export default function SettingsPage({ settings, setSettings }: SettingsProps) {
     persist ? commit(next) : setLocalSettings(next);
   };
 
-  const handleToggle = (key: 'autoDetect' | 'showConfidence') => {
+  const handleToggle = (key: 'autoDetect' | 'showConfidence' | 'learnFromTyping' | 'useMemory') => {
     updateSetting(key, !localSettings[key]);
+  };
+
+  const refreshModels = async () => {
+    setLoadingModels(true);
+    setModelError(null);
+    const id = localSettings.aiProvider;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'LIST_MODELS', settings: localSettings });
+      if (response?.error) throw new Error(response.error);
+      if (!response?.models?.length) throw new Error('That provider returned no models.');
+      setLiveModels((prev) => ({ ...prev, [id]: response.models }));
+    } catch (err: any) {
+      setModelError(err.message || 'Could not reach the provider.');
+    } finally {
+      setLoadingModels(false);
+    }
   };
 
   const active = getProviderConfig(localSettings);
@@ -130,7 +151,18 @@ export default function SettingsPage({ settings, setSettings }: SettingsProps) {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-muted-light font-medium">Model</label>
+            <label className="text-xs text-muted-light font-medium flex items-center justify-between">
+              <span>Model</span>
+              <button
+                className="text-[11px] text-primary-400 hover:underline font-medium flex items-center gap-1 disabled:opacity-50"
+                onClick={refreshModels}
+                disabled={loadingModels || !current.apiKey}
+                title="Fetch the provider's current model list"
+              >
+                <RefreshCw size={10} className={loadingModels ? 'animate-spin' : ''} />
+                {loadingModels ? 'Loading…' : 'Refresh list'}
+              </button>
+            </label>
             {/* Free text with suggestions: OpenRouter and NIM expose hundreds of
                 model ids, so a fixed dropdown would lock most of them out. */}
             <input
@@ -143,8 +175,12 @@ export default function SettingsPage({ settings, setSettings }: SettingsProps) {
               onBlur={(e) => updateProvider({ model: e.target.value.trim() }, true)}
             />
             <datalist id={`models-${localSettings.aiProvider}`}>
-              {spec.models.map((m) => <option key={m} value={m} />)}
+              {(liveModels[localSettings.aiProvider] ?? spec.models).map((m) => <option key={m} value={m} />)}
             </datalist>
+            {modelError && <p className="text-[11px] text-amber-400">{modelError}</p>}
+            {liveModels[localSettings.aiProvider] && (
+              <p className="text-[11px] text-muted">{liveModels[localSettings.aiProvider].length} models live from {spec.name}.</p>
+            )}
           </div>
 
           <div className="flex bg-[#18181b]/80 p-3 rounded-lg border border-[#27272a] items-start gap-3 mt-4">
@@ -167,37 +203,75 @@ export default function SettingsPage({ settings, setSettings }: SettingsProps) {
         </div>
 
         <div className="glass-card-static p-4 space-y-4">
-          <div className="flex items-center justify-between cursor-pointer" onClick={() => handleToggle('autoDetect')}>
-            <div>
-              <p className="text-sm font-medium text-white">Auto-detect forms</p>
-              <p className="text-[10px] text-muted">Scan page automatically when popup opens</p>
-            </div>
-            <div className={`toggle-track ${localSettings.autoDetect ? 'active' : ''}`}>
-              <div className="toggle-thumb"></div>
-            </div>
-          </div>
-          
-          <div className="h-px w-full bg-[#27272a]"></div>
+          <Toggle
+            on={localSettings.autoDetect}
+            onClick={() => handleToggle('autoDetect')}
+            title="Auto-detect forms"
+            hint="Scan the page the moment the popup opens"
+          />
+          <div className="h-px w-full bg-[#27272a]" />
+          <Toggle
+            on={localSettings.showConfidence}
+            onClick={() => handleToggle('showConfidence')}
+            title="Flag uncertain answers"
+            hint="Mark predictions the model isn't sure about"
+          />
+        </div>
+      </div>
 
-          <div className="flex items-center justify-between cursor-pointer" onClick={() => handleToggle('showConfidence')}>
-            <div>
-              <p className="text-sm font-medium text-white">Show confidence scores</p>
-              <p className="text-[10px] text-muted">Highlight low-confidence AI predictions</p>
-            </div>
-            <div className={`toggle-track ${localSettings.showConfidence ? 'active' : ''}`}>
-              <div className="toggle-thumb"></div>
-            </div>
-          </div>
+      <div className="divider" />
+
+      {/* Learning */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 mb-1">
+          <Brain size={16} className="text-violet-400" />
+          <h3 className="text-sm font-semibold tracking-wide">Learning</h3>
+        </div>
+
+        <div className="glass-card-static p-4 space-y-4">
+          <Toggle
+            on={localSettings.useMemory}
+            onClick={() => handleToggle('useMemory')}
+            title="Reuse what I've answered before"
+            hint="Remembered answers are used first — instant and free"
+          />
+          <div className="h-px w-full bg-[#27272a]" />
+          <Toggle
+            on={localSettings.learnFromTyping}
+            onClick={() => handleToggle('learnFromTyping')}
+            title="Learn from what I type"
+            hint="Values you type into forms yourself become memory too"
+          />
+          <p className="text-[11px] text-muted-light leading-relaxed bg-violet-500/5 border border-violet-500/15 rounded-lg p-2.5">
+            Passwords, card numbers, CVVs and anything matching a secret are filtered out before anything is
+            written. Review or delete every learned fact on the Memory tab.
+          </p>
         </div>
       </div>
 
       <div className="space-y-2 mt-auto pt-6 opacity-60 hover:opacity-100 transition-opacity">
-        <p className="text-[10px] text-center text-muted">FormPilot v1.0.0</p>
-        <div className="flex justify-center gap-4 text-[10px] text-primary-400 font-medium">
+        <p className="text-[11px] text-center text-muted">
+          FormPilot v{chrome?.runtime?.getManifest?.().version ?? '1.1.0'} — updates install automatically
+        </p>
+        <div className="flex justify-center gap-4 text-[11px] text-primary-400 font-medium">
           <a href="/privacy.html" target="_blank" rel="noreferrer" className="hover:underline">Privacy Policy</a>
           <a href="#" className="hover:underline">Documentation</a>
         </div>
       </div>
     </div>
+  );
+}
+
+function Toggle({ on, onClick, title, hint }: { on: boolean; onClick: () => void; title: string; hint: string }) {
+  return (
+    <button className="flex items-center justify-between gap-3 w-full text-left" onClick={onClick} role="switch" aria-checked={on}>
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-white leading-tight">{title}</p>
+        <p className="text-[11px] text-muted mt-0.5 leading-snug">{hint}</p>
+      </div>
+      <div className={`toggle-track shrink-0 ${on ? 'active' : ''}`}>
+        <div className="toggle-thumb" />
+      </div>
+    </button>
   );
 }

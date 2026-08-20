@@ -42,10 +42,12 @@ export default {
           300: '#332e4a',
           400: '#3d3757',
         },
+        // Lifted for contrast: the previous values failed WCAG AA against the
+        // near-black surfaces at the 11-13px sizes this popup uses.
         muted: {
-          DEFAULT: '#9b95a8',
-          light: '#b8b3c4',
-          dark: '#6b6578',
+          DEFAULT: '#a8a3b4',
+          light: '#cbc7d4',
+          dark: '#8b8598',
         },
       },
       animation: {

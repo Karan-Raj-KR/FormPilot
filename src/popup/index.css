@@ -10,9 +10,11 @@
   --bg-elevated: #3f3f46;
   --border-default: #27272a;
   --border-accent: rgba(14, 165, 233, 0.25);
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-primary: #fafafa;
+  /* Bumped from #a1a1aa / #71717a — the old muted tones sat at ~3:1 on the
+     near-black background, below WCAG AA for the small sizes used here. */
+  --text-secondary: #c4c4cd;
+  --text-muted: #9a9aa5;
   --accent: #0ea5e9;
   --accent-hover: #38bdf8;
   --accent-glow: rgba(14, 165, 233, 0.3);
@@ -28,9 +30,13 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
 }
+
+/* Never let a long unbroken value blow out the 420px popup. */
+p, span, label, h1, h2, h3 { overflow-wrap: anywhere; }
 
 #root {
   width: 100%;
@@ -41,7 +47,7 @@ body {
 
 /* ─── Custom Scrollbar ─── */
 ::-webkit-scrollbar {
-  width: 4px;
+  width: 7px;
 }
 
 ::-webkit-scrollbar-track {
@@ -89,8 +95,9 @@ body {
     border: 1px solid var(--border-default);
     border-radius: 10px;
     color: var(--text-primary);
-    padding: 10px 14px;
-    font-size: 13px;
+    padding: 10px 13px;
+    font-size: 13.5px;
+    line-height: 1.5;
     font-family: inherit;
     outline: none;
     transition: all 0.2s ease;
@@ -99,6 +106,12 @@ body {
   .glass-input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+
+  .glass-input:disabled,
+  .glass-textarea:disabled {
+    opacity: 0.85;
+    cursor: default;
   }
 
   .glass-input::placeholder {
@@ -111,8 +124,9 @@ body {
     border: 1px solid var(--border-default);
     border-radius: 10px;
     color: var(--text-primary);
-    padding: 10px 14px;
-    font-size: 13px;
+    padding: 10px 13px;
+    font-size: 13.5px;
+    line-height: 1.55;
     font-family: inherit;
     outline: none;
     resize: vertical;
@@ -250,9 +264,10 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 3px 8px;
+    padding: 3px 7px;
     border-radius: 6px;
-    font-size: 11px;
+    font-size: 10.5px;
+    white-space: nowrap;
     font-weight: 600;
     letter-spacing: 0.02em;
   }
@@ -283,8 +298,14 @@ body {
 
   .badge-blue {
     background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.25);
+  }
+
+  .badge-violet {
+    background: rgba(139, 92, 246, 0.15);
+    color: #c4b5fd;
+    border: 1px solid rgba(139, 92, 246, 0.25);
   }
 
   /* Divider */
@@ -389,4 +410,20 @@ body {
   opacity: 1;
   transform: translateY(0);
   transition: all 0.25s ease;
+}
+
+/* ─── Keyboard focus ─── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

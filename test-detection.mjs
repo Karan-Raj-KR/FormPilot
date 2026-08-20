@@ -37,3 +37,45 @@ assert.equal(cardFieldFor('Expiry month'), 'expiryMonth');
 assert.equal(cardFieldFor('Expiration date'), 'expiryFull');
 
 console.log('✅ field routing OK');
+
+/* ─── Memory: what it learns, and what it must never learn ─── */
+import { memoryKey, isLearnable, recall, memoryForPrompt } from './src/shared/memory.ts';
+
+// The same question written five ways collapses to one key.
+const key = memoryKey('First Name *', 'first_name', 'text');
+for (const variant of [
+  memoryKey('first name', 'firstName', 'text'),
+  memoryKey('  FIRST   NAME  ', 'first-name', 'text'),
+  memoryKey('Your first name', 'first_name', 'text'),
+]) assert.equal(variant, key, `"${variant}" should normalize to "${key}"`);
+
+// …but two different questions must not.
+assert.notEqual(memoryKey('First name', 'fname', 'text'), memoryKey('Last name', 'lname', 'text'));
+
+// Secrets never enter memory, whatever the field claims to be.
+const plain = { category: 'contact', type: 'text', label: 'Email', name: 'email' };
+assert.equal(isLearnable(plain, 'me@example.com'), true);
+assert.equal(isLearnable({ ...plain, type: 'password' }, 'hunter2'), false);
+assert.equal(isLearnable({ ...plain, category: 'payment' }, 'Visa'), false);
+assert.equal(isLearnable({ ...plain, category: 'credential' }, 'karan'), false);
+assert.equal(isLearnable(plain, '4111 1111 1111 1111'), false, 'card numbers must never be learned');
+assert.equal(isLearnable(plain, '123'), false, 'bare 3-4 digit values look like CVVs');
+assert.equal(isLearnable({ ...plain, label: 'API key' }, 'abcdefgh'), false);
+assert.equal(isLearnable(plain, ''), false);
+assert.equal(isLearnable(plain, 'x'.repeat(401)), false);
+
+// Recall prefers the answer given on this exact site over the general one.
+const facts = [
+  { key: memoryKey('Username', 'username', 'text'), label: 'Username', value: 'global-me', domain: '', hits: 3, source: 'fill', updatedAt: 1 },
+  { key: memoryKey('Username', 'username', 'text'), label: 'Username', value: 'site-me', domain: 'example.com', hits: 1, source: 'fill', updatedAt: 2 },
+];
+const field = { label: 'Username', name: 'username', type: 'text' };
+assert.equal(recall(facts, field, 'example.com').value, 'site-me');
+assert.equal(recall(facts, field, 'other.com').value, 'global-me');
+assert.equal(recall(facts, { label: 'Nickname', name: 'nick', type: 'text' }, 'example.com'), undefined);
+
+// The prompt slice leads with facts that answer fields actually on screen.
+const prompt = memoryForPrompt(facts, [field], 'example.com');
+assert.equal(prompt['Username'], 'site-me');
+
+console.log('✅ memory OK');

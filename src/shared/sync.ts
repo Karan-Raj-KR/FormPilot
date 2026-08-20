@@ -14,6 +14,7 @@ import {
   getHistory, saveHistory, getPaymentCards, savePaymentCards,
   getPasswords, savePasswords, getItem, setItem, removeItem,
 } from './storage';
+import { getMemory, saveMemory } from './memory';
 
 export interface SyncPayload {
   profiles: unknown;
@@ -21,6 +22,7 @@ export interface SyncPayload {
   history: unknown;
   paymentCards: unknown;
   passwords: unknown;
+  memory?: unknown;
 }
 
 // The id token is short-lived (1h) and re-fetched on demand; it is never persisted.
@@ -109,10 +111,10 @@ export async function signOut(): Promise<void> {
 
 // ─── Push / pull ───
 async function collect(): Promise<SyncPayload> {
-  const [profiles, settings, history, paymentCards, passwords] = await Promise.all([
-    getProfiles(), getSettings(), getHistory(), getPaymentCards(), getPasswords(),
+  const [profiles, settings, history, paymentCards, passwords, memory] = await Promise.all([
+    getProfiles(), getSettings(), getHistory(), getPaymentCards(), getPasswords(), getMemory(),
   ]);
-  return { profiles, settings, history, paymentCards, passwords };
+  return { profiles, settings, history, paymentCards, passwords, memory };
 }
 
 async function apply(payload: SyncPayload): Promise<void> {
@@ -122,6 +124,9 @@ async function apply(payload: SyncPayload): Promise<void> {
     saveHistory(payload.history as any),
     savePaymentCards(payload.paymentCards as any),
     savePasswords(payload.passwords as any),
+    // Absent from payloads written by v1.0 — leave local memory alone rather
+    // than wiping it with an undefined.
+    payload.memory ? saveMemory(payload.memory as any) : Promise.resolve(),
   ]);
 }
 

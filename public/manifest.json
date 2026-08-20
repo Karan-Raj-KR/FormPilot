@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "FormPilot",
-  "version": "1.0.0",
-  "description": "AI-powered form auto-fill with the provider of your choice \u2014 OpenAI, Claude, Gemini, Groq, OpenRouter, NVIDIA NIM or any OpenAI-compatible endpoint.",
+  "version": "1.1.0",
+  "description": "AI form filler that reads the whole page, remembers your answers, and gets smarter every time you fill.",
   "permissions": [
     "storage",
     "activeTab",
     "scripting",
-    "identity"
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -35,7 +36,9 @@
       "css": [
         "content-styles.css"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_origin_as_fallback": true
     }
   ],
   "icons": {
@@ -51,5 +54,8 @@
       },
       "description": "Open FormPilot popup"
     }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
   }
 }

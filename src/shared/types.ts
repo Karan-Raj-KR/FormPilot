@@ -18,7 +18,7 @@ export type LengthPreference = 'concise' | 'moderate' | 'detailed';
 // Any key of PROVIDERS in constants.ts. Kept as a string so adding a provider
 // is a one-line table entry rather than a type change rippling through the app.
 export type AIProvider = string;
-export type Page = 'dashboard' | 'home' | 'preview' | 'profiles' | 'settings' | 'history' | 'paymentVault' | 'passwordVault' | 'account';
+export type Page = 'dashboard' | 'home' | 'preview' | 'profiles' | 'settings' | 'history' | 'paymentVault' | 'passwordVault' | 'account' | 'memory';
 
 // How a provider's HTTP API is shaped. Nearly every vendor speaks 'openai'.
 export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
@@ -44,6 +44,9 @@ export interface ProviderConfig {
 export interface DetectedField {
   id: string;
   fieldId?: string;
+  // Which frame of the tab the element lives in. 0 is the top document; forms
+  // embedded in an iframe (Stripe, Typeform, Google Forms) get their own id.
+  frameId?: number;
   selector: string;
   fallbackSelector?: string;
   tagName: string;
@@ -52,12 +55,44 @@ export interface DetectedField {
   placeholder: string;
   name: string;
   ariaLabel: string;
+  // The page's own autocomplete hint ('cc-number', 'one-time-code', …).
+  autocomplete?: string;
+  // Empty for sensitive fields — their real value never leaves the page.
   currentValue: string;
   suggestedValue: string;
   confidence: number;
   category: FieldCategory;
   status: 'pending' | 'generating' | 'ready' | 'filled' | 'skipped' | 'error';
   options?: string[];
+  // Where the suggested value came from, so the UI can say so.
+  source?: 'ai' | 'memory' | 'vault';
+  required?: boolean;
+  // Section heading / fieldset the field sits under, used for grouping and as
+  // extra context for the model.
+  section?: string;
+}
+
+// ─── Page context ───
+// What the page is about, gathered at scan time and handed to the model so it
+// answers "Why do you want to work here?" knowing which company is asking.
+export interface PageContext {
+  url: string;
+  domain: string;
+  title: string;
+  description: string;
+  headings: string[];
+  submitLabels: string[];
+}
+
+// ─── Memory ───
+export interface MemoryFact {
+  key: string;      // normalized question, e.g. "first name"
+  label: string;    // as it was written on the page
+  value: string;
+  domain: string;   // '' means it applies everywhere
+  hits: number;     // times confirmed — higher is more trusted
+  source: 'fill' | 'typed';
+  updatedAt: number;
 }
 
 // ─── Profile ───
@@ -107,6 +142,10 @@ export interface Settings {
   activeProfileId: string;
   autoDetect: boolean;
   showConfidence: boolean;
+  // Watch what the user types into forms and turn it into memory.
+  learnFromTyping: boolean;
+  // Reuse remembered answers before asking the model.
+  useMemory: boolean;
 }
 
 // ─── Sync / account ───
@@ -166,11 +205,13 @@ export interface ScanFieldsMessage {
 
 export interface ScanFieldsResponse {
   fields: DetectedField[];
+  context?: PageContext;
 }
 
 export interface FillFieldMessage {
   type: 'FILL_FIELD';
   fieldId?: string;
+  frameId?: number;
   selector: string;
   fallbackSelector?: string;
   value: string;
@@ -188,6 +229,8 @@ export interface GenerateFillsMessage {
     fields: DetectedField[];
     profile: Profile;
     settings: Settings;
+    context?: PageContext;
+    memory?: Record<string, string>;
   };
 }
 

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Zap, CheckCircle2, AlertCircle, ChevronRight, Wand2 } from 'lucide-react';
-import type { DetectedField, Profile, Page } from '../../shared/types';
+import { Search, Zap, CheckCircle2, AlertCircle, ChevronRight, Wand2, RefreshCw, Globe } from 'lucide-react';
+import type { DetectedField, Profile, Page, PageContext } from '../../shared/types';
 import { CATEGORY_CONFIG } from '../../shared/constants';
+import { scanActiveTab } from '../scan';
 
 interface HomeProps {
   fields: DetectedField[];
@@ -9,9 +10,11 @@ interface HomeProps {
   navigateTo: (page: Page) => void;
   activeProfile: Profile;
   autoDetect: boolean;
+  pageContext: PageContext | null;
+  setPageContext: (context: PageContext | null) => void;
 }
 
-export default function Home({ fields, setFields, navigateTo, activeProfile, autoDetect }: HomeProps) {
+export default function Home({ fields, setFields, navigateTo, activeProfile, autoDetect, pageContext, setPageContext }: HomeProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,33 +24,14 @@ export default function Home({ fields, setFields, navigateTo, activeProfile, aut
     setFields([]);
 
     try {
-      if (!chrome?.tabs) throw new Error('Not running in extension environment');
-      
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab.id) throw new Error('No active tab found');
-      if (tab.url?.startsWith('chrome://')) throw new Error('Cannot run on internal Chrome pages');
-
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_FIELDS' }).catch(async (err) => {
-        // Fallback if content script isn't injected yet (e.g. the page was open
-        // before the extension was installed or reloaded).
-        if (!String(err?.message).includes('Receiving end does not exist')) throw err;
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id! },
-          files: ['content.js'],
-        });
-        return chrome.tabs.sendMessage(tab.id!, { type: 'SCAN_FIELDS' });
-      });
-
-      if (response?.fields) {
-        setFields(response.fields);
-      } else {
-        throw new Error('Invalid response from content script');
-      }
+      const { fields: found, context } = await scanActiveTab();
+      setFields(found);
+      setPageContext(context);
+      if (found.length === 0) setError(null);
     } catch (err: any) {
       setError(err.message || 'Failed to scan page');
     } finally {
-      // Fake delay for dramatic UI effect
-      setTimeout(() => setIsScanning(false), 800);
+      setIsScanning(false);
     }
   };
 
@@ -58,106 +42,122 @@ export default function Home({ fields, setFields, navigateTo, activeProfile, aut
     }
   }, []);
 
-  const pendingFields = fields.filter(f => f.status === 'pending').length;
-  const filledFields = fields.filter(f => f.status === 'filled').length;
+  const filledFields = fields.filter((f) => f.status === 'filled').length;
+  const requiredFields = fields.filter((f) => f.required).length;
+  const frameCount = new Set(fields.map((f) => f.frameId ?? 0)).size;
 
-  const categories = Array.from(new Set(fields.map(f => f.category)));
+  // Biggest groups first — the user reads the top of the list, so put the
+  // categories that actually dominate the form there.
+  const categories = Object.entries(
+    fields.reduce<Record<string, number>>((acc, f) => {
+      acc[f.category] = (acc[f.category] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Status Hero */}
-      <div className="glass-card p-5 pb-6 mb-4 relative overflow-hidden group shrink-0">
-        {/* Animated background glow */}
-        <div className="absolute -top-10 -right-10 w-32 h-32 bg-primary-500/20 rounded-full blur-2xl group-hover:bg-primary-500/30 transition-colors duration-500"></div>
-        
+    <div className="flex flex-col h-full gap-4">
+      {/* Status hero */}
+      <section className="glass-card p-5 relative overflow-hidden shrink-0">
+        <div className="absolute -top-12 -right-12 w-36 h-36 bg-primary-500/15 rounded-full blur-3xl" />
+
         <div className="relative z-10 flex flex-col items-center text-center">
           {isScanning ? (
             <>
-              <div className="relative w-16 h-16 mb-3">
-                <div className="absolute inset-0 rounded-full border-2 border-primary-500/30 animate-ping"></div>
-                <div className="absolute inset-0 rounded-full border-2 border-primary-500 border-t-transparent animate-spin"></div>
+              <div className="relative w-14 h-14 mb-3">
+                <div className="absolute inset-0 rounded-full border-2 border-primary-500/30 animate-ping" />
+                <div className="absolute inset-0 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
                 <div className="absolute inset-0 flex items-center justify-center text-primary-400">
-                  <Search size={24} />
+                  <Search size={22} />
                 </div>
               </div>
-              <h2 className="text-lg font-bold text-white mb-1">Scanning DOM...</h2>
-              <p className="text-xs text-muted-light">Analyzing form structure and fields</p>
+              <h2 className="text-base font-bold mb-1">Reading the page</h2>
+              <p className="text-xs text-muted-light">Main document, iframes and shadow DOM</p>
             </>
           ) : error ? (
             <>
-              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center text-red-500 mb-3 mx-auto">
-                <AlertCircle size={28} />
+              <div className="w-14 h-14 bg-red-500/15 rounded-2xl flex items-center justify-center text-red-400 mb-3">
+                <AlertCircle size={26} />
               </div>
-              <h2 className="text-lg font-bold text-white mb-1">Scan Failed</h2>
-              <p className="text-xs text-red-400 mb-4 px-4">{error}</p>
-              <button className="btn-secondary w-full" onClick={scanPage}>Try Again</button>
+              <h2 className="text-base font-bold mb-1">Scan failed</h2>
+              <p className="text-xs text-red-300/90 mb-4 px-2 leading-relaxed">{error}</p>
+              <button className="btn-secondary w-full" onClick={scanPage}>Try again</button>
             </>
           ) : fields.length > 0 ? (
             <>
-              <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-700 rounded-full flex items-center justify-center text-white mb-3 mx-auto shadow-[0_0_20px_rgba(139,92,246,0.4)]">
-                <Zap size={28} fill="currentColor" className="text-white/90" />
+              <div className="w-14 h-14 bg-gradient-to-br from-primary-500 to-primary-700 rounded-2xl flex items-center justify-center text-white mb-3 shadow-[0_0_24px_rgba(14,165,233,0.35)]">
+                <Zap size={26} fill="currentColor" />
               </div>
-              <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary-200 to-white mb-1 tracking-tight">
-                {fields.length} Fields Found
-              </h2>
-              <div className="flex gap-2 justify-center mt-2">
-                <div className="badge badge-accent">{pendingFields} pending</div>
-                {filledFields > 0 && <div className="badge badge-green">{filledFields} filled</div>}
+              <h2 className="text-3xl font-black tracking-tight leading-none">{fields.length}</h2>
+              <p className="text-sm font-medium text-muted-light mt-1">fillable fields found</p>
+              <div className="flex flex-wrap gap-1.5 justify-center mt-3">
+                {requiredFields > 0 && <span className="badge badge-amber">{requiredFields} required</span>}
+                {frameCount > 1 && <span className="badge badge-accent">{frameCount} frames</span>}
+                {filledFields > 0 && <span className="badge badge-green">{filledFields} filled</span>}
               </div>
             </>
           ) : (
             <>
-              <div className="w-16 h-16 bg-[#27272a] rounded-full flex items-center justify-center text-muted mb-3 mx-auto">
-                <CheckCircle2 size={28} />
+              <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center text-muted mb-3">
+                <CheckCircle2 size={26} />
               </div>
-              <h2 className="text-lg font-bold text-white mb-1">No Forms Found</h2>
-              <p className="text-xs text-muted-light mb-4">We couldn't detect any input fields here.</p>
-              <button className="btn-secondary w-full" onClick={scanPage}>Rescan Page</button>
+              <h2 className="text-base font-bold mb-1">No form here</h2>
+              <p className="text-xs text-muted-light mb-4 leading-relaxed">Nothing fillable on this page. Open a form and scan again.</p>
+              <button className="btn-secondary w-full" onClick={scanPage}>
+                <RefreshCw size={14} /> Rescan page
+              </button>
             </>
           )}
         </div>
-      </div>
+      </section>
 
-      {/* Main Action Block - only show if fields exist and not scanning */}
+      {/* What the extension understands about this page */}
+      {!isScanning && pageContext && fields.length > 0 && (
+        <section className="glass-card-static px-3 py-2.5 flex items-start gap-2.5 shrink-0">
+          <Globe size={14} className="text-primary-400 mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <p className="text-xs font-semibold truncate">{pageContext.title || pageContext.domain}</p>
+            <p className="text-[11px] text-muted truncate">{pageContext.domain}</p>
+          </div>
+        </section>
+      )}
+
       {!isScanning && fields.length > 0 && (
-        <div className="flex-1 flex flex-col justify-between">
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold text-muted-light uppercase tracking-wider px-1">Detected Contexts</h3>
-            
+        <div className="flex-1 flex flex-col justify-between min-h-0">
+          <div className="space-y-2 overflow-y-auto min-h-0 pr-1">
+            <div className="flex items-center justify-between px-0.5">
+              <h3 className="text-xs font-semibold text-muted-light uppercase tracking-wider">What's on this form</h3>
+              <button className="btn-ghost !px-2 !py-1 !text-[11px]" onClick={scanPage}>
+                <RefreshCw size={11} /> Rescan
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
-              {categories.slice(0, 4).map((cat, idx) => {
-                const config = CATEGORY_CONFIG[cat] || CATEGORY_CONFIG.other;
-                const count = fields.filter(f => f.category === cat).length;
+              {categories.map(([cat, count], idx) => {
+                const config = CATEGORY_CONFIG[cat as keyof typeof CATEGORY_CONFIG] ?? CATEGORY_CONFIG.other;
                 return (
-                  <div key={cat} className={`glass-card-static p-2 flex items-center gap-2 stagger-${idx + 1} animate-slide-up`}>
-                    <div className="w-6 h-6 rounded flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${config.color}20`, color: config.color }}>
-                      <span className="text-xs">{config.icon}</span>
+                  <div key={cat} className={`glass-card-static px-2.5 py-2 flex items-center gap-2.5 stagger-${Math.min(idx + 1, 5)} animate-slide-up`}>
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-sm" style={{ backgroundColor: `${config.color}1f`, color: config.color }}>
+                      {config.icon}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs font-medium truncate">{config.label}</p>
-                      <p className="text-[10px] text-muted">{count} fields</p>
+                      <p className="text-xs font-semibold truncate">{config.label}</p>
+                      <p className="text-[11px] text-muted">{count} field{count === 1 ? '' : 's'}</p>
                     </div>
                   </div>
                 );
               })}
             </div>
-            
-            {categories.length > 4 && (
-              <p className="text-xs text-center text-muted italic">...and {categories.length - 4} more contexts</p>
-            )}
           </div>
 
-          <div className="mt-4 animate-slide-up stagger-4">
-            <button 
-              className="btn-primary w-full py-4 text-[15px]" 
-              onClick={() => navigateTo('preview')}
-            >
-              <Wand2 size={18} />
-              <span>Review & Auto-fill</span>
+          <div className="mt-4 shrink-0">
+            <button className="btn-primary w-full py-3.5 text-sm" onClick={() => navigateTo('preview')}>
+              <Wand2 size={17} />
+              <span>Review &amp; auto-fill</span>
               <ChevronRight size={16} className="ml-auto opacity-70" />
             </button>
-            <p className="text-center text-[10px] text-muted mt-2">
-              Using profile: <span className="text-primary-400 font-medium">{activeProfile.name}</span>
+            <p className="text-center text-[11px] text-muted mt-2">
+              Using <span className="text-primary-400 font-medium">{activeProfile?.emoji} {activeProfile?.name}</span>
             </p>
           </div>
         </div>

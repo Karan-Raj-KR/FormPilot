@@ -1,7 +1,7 @@
 import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry } from './types';
 import {
   DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS, PROVIDERS, RETIRED_MODEL_IDS,
-} from './constants';
+} from './constants.ts';
 
 // ─── Chrome storage detection ───
 const isChromeStorage =

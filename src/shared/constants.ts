@@ -77,6 +77,8 @@ export const DEFAULT_SETTINGS: Settings = {
   activeProfileId: 'personal',
   autoDetect: true,
   showConfidence: true,
+  learnFromTyping: true,
+  useMemory: true,
 };
 
 // ─── Providers ───
@@ -210,7 +212,41 @@ export const STORAGE_KEYS = {
   PAYMENT_CARDS: 'formpilot_payment_cards',
   PASSWORDS: 'formpilot_passwords',
   SYNC_STATE: 'formpilot_sync_state',
+  MEMORY: 'formpilot_memory',
 } as const;
+
+// How many learned facts to keep. Well under chrome.storage.local's 10MB.
+export const MEMORY_LIMIT = 600;
+
+// Values that must never be learned, stored in history, or put in a prompt.
+// Deliberately over-broad: refusing to memorise a postal code costs nothing,
+// leaking a one-time passcode or an account number cannot be undone.
+export const SENSITIVE_VALUE = new RegExp([
+  '^\\s*(?:\\d[ -]?){12,19}\\s*$',              // card / bank account numbers
+  '^\\s*\\d{3,4}\\s*$',                          // CVV, short PIN
+  '^\\s*\\d{5,8}\\s*$',                          // one-time codes
+  '^\\s*\\d{3}-\\d{2}-\\d{4}\\s*$',             // US SSN
+  '^\\s*[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\s*$',      // IBAN
+  '\\b(?:password|passcode|secret|api[ _-]?key|token|otp|one[ -]?time|verification code|security code|ssn|social security|sort code|routing|iban|swift|account number|passport|licen[cs]e number|tax id|national insurance|aadhaar|pan number|cvv|cvc|pin)\\b',
+].join('|'), 'i');
+
+// The browser's own autocomplete hint is the most reliable sensitivity signal
+// on the page, and it costs nothing to read.
+export const SENSITIVE_AUTOCOMPLETE = /^(?:cc-|new-password|current-password|one-time-code)/i;
+
+// What replaces a sensitive value anywhere it would otherwise be exposed.
+export const REDACTED = '[redacted]';
+
+// True when this field's existing value must not leave the device — used before
+// anything is handed to a model, written to history, or learned.
+export function isSensitiveField(
+  field: { category?: string; type?: string; label?: string; name?: string; autocomplete?: string },
+): boolean {
+  if (field.category === 'payment' || field.category === 'credential') return true;
+  if (field.type === 'password') return true;
+  if (field.autocomplete && SENSITIVE_AUTOCOMPLETE.test(field.autocomplete)) return true;
+  return SENSITIVE_VALUE.test(`${field.label ?? ''} ${field.name ?? ''}`);
+}
 
 // Model ids that vendors have retired — cleared from saved settings on read so
 // an upgraded install doesn't keep calling an endpoint that now 404s.
@@ -226,8 +262,13 @@ export const RETIRED_MODEL_IDS = [
 // ─── Category inference ───
 // Lives here rather than in the content script so it stays free of DOM access
 // and can be exercised by test-detection.mjs.
-export function inferCategory(label: string, type: string, name: string): FieldCategory {
+export function inferCategory(label: string, type: string, name: string, autocomplete = ''): FieldCategory {
   const combined = `${label} ${name} ${type}`.toLowerCase();
+
+  // The page's own autocomplete hint is authoritative when present.
+  if (/^cc-/i.test(autocomplete)) return 'payment';
+  if (/^(new-password|current-password)$/i.test(autocomplete)) return 'credential';
+  if (/^username$/i.test(autocomplete)) return 'credential';
 
   // Sensitive categories must win over the generic ones below — "Name on card"
   // otherwise matches /name/ and gets treated as a personal field.

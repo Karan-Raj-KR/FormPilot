@@ -35,6 +35,13 @@ function normalizeDomain(value: string): string {
 
 const EMPTY_FORM = { domain: '', username: '', password: '', label: '' };
 
+// Stable per-domain colour, computed locally.
+function domainHue(domain: string): number {
+  let hash = 0;
+  for (let i = 0; i < domain.length; i++) hash = (hash * 31 + domain.charCodeAt(i)) % 360;
+  return hash;
+}
+
 export default function PasswordVault({ navigateTo }: PasswordVaultProps) {
   const [entries, setEntries]                 = useState<PasswordEntry[]>([]);
   const [isLoading, setIsLoading]             = useState(true);
@@ -289,12 +296,14 @@ export default function PasswordVault({ navigateTo }: PasswordVaultProps) {
           {domains.map(domain => (
             <div key={domain}>
               <div className="flex items-center gap-2 mb-2">
-                <img
-                  src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
-                  alt=""
-                  className="w-4 h-4 rounded"
-                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                />
+                {/* Local dot, not a remote favicon: asking an external service
+                    for an icon would tell it every site you hold an account on. */}
+                <span
+                  className="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold uppercase shrink-0"
+                  style={{ backgroundColor: `hsl(${domainHue(domain)} 60% 22%)`, color: `hsl(${domainHue(domain)} 70% 70%)` }}
+                >
+                  {domain.replace(/^www\./, '').charAt(0) || '?'}
+                </span>
                 <span className="text-[10px] font-bold text-muted-light uppercase tracking-wider">{domain}</span>
               </div>
               <div className="space-y-2">
