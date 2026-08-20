@@ -174,6 +174,28 @@ export function getProviderConfig(
   };
 }
 
+// ─── System prompt starters ───
+// Concrete examples beat an empty box: most people don't know what a standing
+// instruction is until they see one.
+export const SYSTEM_PROMPT_PRESETS: { label: string; text: string }[] = [
+  {
+    label: 'Job hunting',
+    text: 'Write in first person, confident but not boastful. Keep free-text answers under 120 words unless the form asks for more. Lead with impact and numbers where I have them. Never mention salary expectations unless the field explicitly asks. Never say I am "currently looking" — say I am "exploring the right opportunity".',
+  },
+  {
+    label: 'Keep it short',
+    text: 'Answer as briefly as the field allows. One sentence for open questions, never more than two. No filler, no restating the question back.',
+  },
+  {
+    label: 'Formal / academic',
+    text: 'Use formal register and complete sentences. No contractions, no exclamation marks. Prefer precise nouns over adjectives. Spell out acronyms on first use.',
+  },
+  {
+    label: 'Minimal disclosure',
+    text: 'Volunteer nothing that is not asked for. For optional fields with no clear answer in my profile, return an empty string rather than inventing or inferring. Never guess at demographic details.',
+  },
+];
+
 // ─── Tone Options ───
 export const TONE_OPTIONS: { id: TonePreference; label: string; icon: string }[] = [
   { id: 'formal', label: 'Formal', icon: '🎩' },
@@ -228,6 +250,15 @@ export const SENSITIVE_VALUE = new RegExp([
   '^\\s*\\d{3}-\\d{2}-\\d{4}\\s*$',             // US SSN
   '^\\s*[A-Z]{2}\\d{2}[A-Z0-9]{10,30}\\s*$',      // IBAN
   '\\b(?:password|passcode|secret|api[ _-]?key|token|otp|one[ -]?time|verification code|security code|ssn|social security|sort code|routing|iban|swift|account number|passport|licen[cs]e number|tax id|national insurance|aadhaar|pan number|cvv|cvc|pin)\\b',
+].join('|'), 'i');
+
+// Secrets sitting inside prose. SENSITIVE_VALUE anchors on the whole value,
+// which is right for a form field but blind to "my card is 4111 …" in a bio.
+// The word list requires an assignment ("password is", "token:") so that a
+// résumé line about building a password reset flow is not treated as a secret.
+export const SECRET_IN_TEXT = new RegExp([
+  '(?:\\d[ -]?){13,19}',
+  '\\b(?:password|passcode|secret|api[ _-]?key|token|otp|one[ -]?time code|cvv|cvc|ssn|social security|iban|passport(?: number)?|aadhaar|pin)\\b\\s*(?:is|are|=|:)',
 ].join('|'), 'i');
 
 // The browser's own autocomplete hint is the most reliable sensitivity signal

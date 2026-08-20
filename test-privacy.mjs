@@ -81,3 +81,53 @@ for (const injected of ['4111111111111111', '482913', 'my password is hunter2'])
 }
 
 console.log('✅ privacy guards OK');
+
+/* ─── 7. The profile is a prompt: warn before secrets leave the device ─── */
+import { findSecrets, normalizeProfile, validateProfile, LIMITS } from './src/shared/profile.ts';
+
+assert.deepEqual(
+  findSecrets({ data: { bio: 'Backend dev in Bengaluru', firstName: 'Kay' } }),
+  [], 'an ordinary profile must not raise a false alarm');
+
+assert.ok(findSecrets({ data: { rawInfo: 'My card is 4111 1111 1111 1111' } }).includes('rawInfo'),
+  'a card number pasted into the profile must be flagged');
+assert.ok(findSecrets({ data: { customFields: { 'Bank': 'GB29NWBK60161331926819' } } }).includes('Bank'),
+  'custom fields are scanned too');
+assert.ok(findSecrets({ systemPrompt: 'my password is hunter2' }).includes('systemPrompt'),
+  'the system prompt is scanned too');
+
+// A résumé that merely mentions the word must not trip the scan.
+assert.deepEqual(
+  findSecrets({ data: { rawInfo: 'x'.repeat(220) + '\nBuilt a password reset flow for 2M users' } }),
+  [], 'prose about security work is not a secret');
+
+/* ─── 8. A profile cannot grow without bound or smuggle blanks ─── */
+const huge = normalizeProfile({
+  name: '  Work  ',
+  systemPrompt: 'y'.repeat(LIMITS.systemPrompt + 500),
+  data: {
+    rawInfo: 'z'.repeat(LIMITS.rawInfo + 1000),
+    firstName: '  Kay  ',
+    customFields: Object.fromEntries([...Array(LIMITS.customFields + 10)].map((_, i) => [`k${i}`, 'v'])),
+  },
+});
+assert.equal(huge.name, 'Work', 'names are trimmed');
+assert.equal(huge.data.firstName, 'Kay');
+assert.equal(huge.systemPrompt.length, LIMITS.systemPrompt, 'system prompt is capped');
+assert.equal(huge.data.rawInfo.length, LIMITS.rawInfo, 'raw info is capped');
+assert.equal(Object.keys(huge.data.customFields).length, LIMITS.customFields, 'custom fields are capped');
+assert.equal(huge.data.twitter, '', 'every model field exists after normalize');
+
+// Blank custom fields are dropped rather than shipped as empty prompt keys.
+assert.deepEqual(normalizeProfile({ name: 'x', data: { customFields: { '': 'v', 'k': '  ' , 'ok': 'yes' } } }).data.customFields, { ok: 'yes' });
+
+/* ─── 9. Validation blocks only what is genuinely broken ─── */
+const bad = validateProfile({ name: '', data: { email: 'not-an-email' } });
+assert.ok(bad.some((i) => i.field === 'name' && i.severity === 'error'));
+assert.ok(bad.some((i) => i.field === 'email' && i.severity === 'error'));
+assert.deepEqual(validateProfile({ name: 'Work', data: { email: 'me@example.com', website: 'you.dev' } }), [],
+  'a valid profile raises nothing');
+// Unusual but legitimate input is a warning, never a block.
+assert.ok(validateProfile({ name: 'Work', data: { phone: 'call me' } }).every((i) => i.severity === 'warning'));
+
+console.log('✅ profile guards OK');

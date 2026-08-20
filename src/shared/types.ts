@@ -127,6 +127,10 @@ export interface Profile {
   color: string;
   emoji: string;
   data: ProfileData;
+  // Standing instructions the user writes for this profile, handed to the model
+  // in the system slot. Style guidance only — it cannot override the safety
+  // rules in the request.
+  systemPrompt?: string;
   tonePreference: TonePreference;
   lengthPreference: LengthPreference;
   createdAt: number;
