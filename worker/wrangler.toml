@@ -1,0 +1,13 @@
+name = "formpilot-sync"
+main = "index.ts"
+compatibility_date = "2025-01-01"
+
+# Must match the OAuth client ID used by the extension — tokens minted for any
+# other client are rejected.
+[vars]
+GOOGLE_CLIENT_ID = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "formpilot"
+database_id = ""   # from: npx wrangler d1 create formpilot

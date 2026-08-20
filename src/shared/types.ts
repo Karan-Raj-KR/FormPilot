@@ -15,8 +15,31 @@ export type FieldCategory =
 // ─── Preferences ───
 export type TonePreference = 'formal' | 'casual' | 'bold' | 'professional';
 export type LengthPreference = 'concise' | 'moderate' | 'detailed';
-export type AIProvider = 'openai' | 'anthropic' | 'gemini' | 'groq';
-export type Page = 'dashboard' | 'home' | 'preview' | 'profiles' | 'settings' | 'history' | 'paymentVault' | 'passwordVault';
+// Any key of PROVIDERS in constants.ts. Kept as a string so adding a provider
+// is a one-line table entry rather than a type change rippling through the app.
+export type AIProvider = string;
+export type Page = 'dashboard' | 'home' | 'preview' | 'profiles' | 'settings' | 'history' | 'paymentVault' | 'passwordVault' | 'account';
+
+// How a provider's HTTP API is shaped. Nearly every vendor speaks 'openai'.
+export type ProviderKind = 'openai' | 'anthropic' | 'gemini';
+
+export interface ProviderSpec {
+  name: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  models: string[];      // suggestions only — the model field accepts any string
+  keyUrl?: string;       // where to get an API key
+  keyPlaceholder?: string;
+  editableBaseUrl?: boolean;
+  note?: string;
+}
+
+// Per-provider credentials. baseUrl is only set for custom/self-hosted endpoints.
+export interface ProviderConfig {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+}
 
 export interface DetectedField {
   id: string;
@@ -78,19 +101,20 @@ export interface Profile {
 // ─── Settings ───
 export interface Settings {
   aiProvider: AIProvider;
-  openaiApiKey: string;
-  anthropicApiKey: string;
-  geminiApiKey: string;
-  groqApiKey: string;
-  openaiModel: string;
-  anthropicModel: string;
-  geminiModel: string;
-  groqModel: string;
+  providers: Record<string, ProviderConfig>;
   defaultTone: TonePreference;
   defaultLength: LengthPreference;
   activeProfileId: string;
   autoDetect: boolean;
   showConfidence: boolean;
+}
+
+// ─── Sync / account ───
+export interface SyncState {
+  email: string;
+  userId: string;
+  lastSyncedAt: number;    // local clock, for display
+  remoteUpdatedAt: number; // server clock, sent back as the conflict guard
 }
 
 // ─── History ───

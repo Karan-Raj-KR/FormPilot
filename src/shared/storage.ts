@@ -1,7 +1,6 @@
 import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry } from './types';
 import {
-  DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS,
-  OPENAI_MODELS, ANTHROPIC_MODELS, GEMINI_MODELS, GROQ_MODELS,
+  DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS, PROVIDERS, RETIRED_MODEL_IDS,
 } from './constants';
 
 // ─── Chrome storage detection ───
@@ -11,7 +10,7 @@ const isChromeStorage =
   typeof chrome.storage.local !== 'undefined';
 
 // ─── Generic get/set with fallback to localStorage ───
-async function getItem<T>(key: string): Promise<T | null> {
+export async function getItem<T>(key: string): Promise<T | null> {
   if (isChromeStorage) {
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (result) => {
@@ -23,13 +22,20 @@ async function getItem<T>(key: string): Promise<T | null> {
   return raw ? JSON.parse(raw) : null;
 }
 
-async function setItem<T>(key: string, value: T): Promise<void> {
+export async function setItem<T>(key: string, value: T): Promise<void> {
   if (isChromeStorage) {
     return new Promise((resolve) => {
       chrome.storage.local.set({ [key]: value }, resolve);
     });
   }
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+export async function removeItem(key: string): Promise<void> {
+  if (isChromeStorage) {
+    return new Promise((resolve) => chrome.storage.local.remove(key, () => resolve()));
+  }
+  localStorage.removeItem(key);
 }
 
 // ─── Profiles ───
@@ -67,25 +73,40 @@ export async function deleteProfile(profileId: string): Promise<Profile[]> {
 }
 
 // ─── Settings ───
-export async function getSettings(): Promise<Settings> {
-  const settings = await getItem<Settings>(STORAGE_KEYS.SETTINGS);
-  if (!settings) return DEFAULT_SETTINGS;
+// v1 stored one hardcoded field per provider (openaiApiKey, groqModel, …).
+// v2 keys them by provider id so a new provider is a table entry, not a schema
+// change. Existing installs are migrated on read.
+function migrateSettings(saved: any): Settings {
+  const merged: any = { ...DEFAULT_SETTINGS, ...saved };
+  merged.providers = { ...(saved?.providers ?? {}) };
 
-  // Existing installs have retired model ids saved (e.g. claude-3-7-sonnet, mixtral-8x7b).
-  // Those 404 at the provider and leave the model dropdown blank, so reset them.
-  const merged = { ...DEFAULT_SETTINGS, ...settings };
-  const valid: Record<string, string[]> = {
-    openaiModel: OPENAI_MODELS.map((m) => m.id),
-    anthropicModel: ANTHROPIC_MODELS.map((m) => m.id),
-    geminiModel: GEMINI_MODELS.map((m) => m.id),
-    groqModel: GROQ_MODELS.map((m) => m.id),
-  };
-  for (const [key, ids] of Object.entries(valid)) {
-    if (!ids.includes((merged as any)[key])) {
-      (merged as any)[key] = (DEFAULT_SETTINGS as any)[key];
+  for (const id of Object.keys(PROVIDERS)) {
+    const legacyKey = saved?.[`${id}ApiKey`];
+    const legacyModel = saved?.[`${id}Model`];
+    if (legacyKey || legacyModel) {
+      merged.providers[id] = {
+        apiKey: merged.providers[id]?.apiKey || legacyKey || '',
+        model: merged.providers[id]?.model || legacyModel || '',
+        baseUrl: merged.providers[id]?.baseUrl,
+      };
     }
+    delete merged[`${id}ApiKey`];
+    delete merged[`${id}Model`];
   }
-  return merged;
+
+  // Retired model ids (claude-3-7-sonnet, mixtral-8x7b, …) 404 at the provider.
+  // Only clear ids we know are stale — a free-typed OpenRouter/NIM id is valid
+  // even though it is not in our suggestion list.
+  for (const [id, cfg] of Object.entries(merged.providers as Record<string, any>)) {
+    if (RETIRED_MODEL_IDS.includes(cfg?.model)) cfg.model = PROVIDERS[id]?.models[0] ?? '';
+  }
+  if (!PROVIDERS[merged.aiProvider]) merged.aiProvider = DEFAULT_SETTINGS.aiProvider;
+  return merged as Settings;
+}
+
+export async function getSettings(): Promise<Settings> {
+  const settings = await getItem<any>(STORAGE_KEYS.SETTINGS);
+  return settings ? migrateSettings(settings) : DEFAULT_SETTINGS;
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
@@ -106,6 +127,10 @@ export async function addHistoryEntry(entry: FillHistoryEntry): Promise<void> {
   await setItem(STORAGE_KEYS.HISTORY, history);
 }
 
+export async function saveHistory(history: FillHistoryEntry[]): Promise<void> {
+  await setItem(STORAGE_KEYS.HISTORY, history);
+}
+
 export async function clearHistory(): Promise<void> {
   await setItem(STORAGE_KEYS.HISTORY, []);
 }
@@ -116,8 +141,9 @@ export function generateId(): string {
 }
 
 // ─── Payment Cards ───
-// No encryption needed — chrome.storage.local is sandboxed to this extension only
-// and never synced to any external server.
+// Stored as plaintext in chrome.storage.local, which is sandboxed to this
+// extension. When sync is enabled these are encrypted before upload (crypto.ts)
+// — the server never sees them in the clear.
 export async function getPaymentCards(): Promise<PaymentCard[]> {
   const cards = await getItem<PaymentCard[]>(STORAGE_KEYS.PAYMENT_CARDS);
   return cards ?? [];
@@ -139,8 +165,8 @@ export async function deletePaymentCard(id: string): Promise<void> {
 }
 
 // ─── Passwords ───
-// No encryption needed — chrome.storage.local is sandboxed to this extension only
-// and never synced to any external server.
+// Same storage model as payment cards above: local plaintext, encrypted in
+// transit and at rest on the server when sync is on.
 export async function getPasswords(): Promise<PasswordEntry[]> {
   const entries = await getItem<PasswordEntry[]>(STORAGE_KEYS.PASSWORDS);
   return entries ?? [];

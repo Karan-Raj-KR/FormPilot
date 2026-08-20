@@ -2,19 +2,19 @@
   "manifest_version": 3,
   "name": "FormPilot",
   "version": "1.0.0",
-  "description": "AI-powered form auto-fill using Claude or ChatGPT — smart, contextual, multi-profile.",
+  "description": "AI-powered form auto-fill with the provider of your choice \u2014 OpenAI, Claude, Gemini, Groq, OpenRouter, NVIDIA NIM or any OpenAI-compatible endpoint.",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "identity"
   ],
-
   "host_permissions": [
     "<all_urls>"
   ],
   "action": {
     "default_popup": "index.html",
-    "default_title": "FormPilot — Smart Form Filler",
+    "default_title": "FormPilot \u2014 Smart Form Filler",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

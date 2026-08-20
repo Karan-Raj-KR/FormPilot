@@ -1,3 +1,5 @@
+import { getProviderConfig } from '../shared/constants';
+
 /* ─────────────────────────────────────────────────
    FormPilot — Background Service Worker
    Handles AI API calls and profile/history storage.
@@ -66,16 +68,24 @@ CRITICAL: Respond ONLY with a valid JSON object matching this schema exactly (no
 }`;
 }
 
-// ─── Call OpenAI API ───
-async function callOpenAI(prompt: string, apiKey: string, model: string) {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+// ─── OpenAI-compatible chat completions ───
+// OpenAI, Groq, OpenRouter, NVIDIA NIM, DeepSeek, Mistral, Together, xAI,
+// Fireworks, Ollama and any custom endpoint all speak this exact shape, so
+// they share one function. Only the base URL and key differ.
+async function callOpenAICompatible(prompt: string, apiKey: string, model: string, baseUrl: string) {
+  if (!baseUrl) throw new Error('No API endpoint configured for this provider. Add a base URL in Settings.');
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
+      // Ignored by every other vendor; OpenRouter uses them for attribution.
+      'HTTP-Referer': 'https://github.com/Karan-Raj-KR/FormPilot',
+      'X-Title': 'FormPilot',
     },
     body: JSON.stringify({
-      model: model || 'gpt-4o',
+      model,
       messages: [
         {
           role: 'system',
@@ -85,22 +95,50 @@ async function callOpenAI(prompt: string, apiKey: string, model: string) {
       ],
       temperature: 0.3,
       max_tokens: 4096,
+      response_format: { type: 'json_object' },
     }),
   });
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `OpenAI API error: ${response.status}`);
+    const message = err.error?.message || err.message || `Request failed (${response.status})`;
+    // Not every OpenAI-compatible server implements JSON mode; retry without it
+    // rather than failing the whole fill.
+    if (/response_format|json_object/i.test(message)) {
+      return callOpenAICompatibleNoJsonMode(prompt, apiKey, model, baseUrl);
+    }
+    throw new Error(message);
   }
 
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  return parseAIResponse(content);
+  return parseAIResponse(data.choices?.[0]?.message?.content || '');
+}
+
+async function callOpenAICompatibleNoJsonMode(prompt: string, apiKey: string, model: string, baseUrl: string) {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: 'You are a precise form-filling assistant. Always respond with valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 4096,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || err.message || `Request failed (${response.status})`);
+  }
+  const data = await response.json();
+  return parseAIResponse(data.choices?.[0]?.message?.content || '');
 }
 
 // ─── Call Anthropic API ───
-async function callAnthropic(prompt: string, apiKey: string, model: string) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+async function callAnthropic(prompt: string, apiKey: string, model: string, baseUrl: string) {
+  const response = await fetch(`${baseUrl}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -123,77 +161,42 @@ async function callAnthropic(prompt: string, apiKey: string, model: string) {
   }
 
   const data = await response.json();
-  const content = data.content?.[0]?.text || '';
-  return parseAIResponse(content);
+  return parseAIResponse(data.content?.[0]?.text || '');
 }
 
 // ─── Call Gemini API ───
-async function callGemini(prompt: string, apiKey: string, model: string, attempt: number = 1): Promise<{ suggestions: any[] }> {
-  // Allow user to use 2.0 or 2.5 as selected in UI
+async function callGemini(prompt: string, apiKey: string, model: string, baseUrl: string, attempt: number = 1): Promise<{ suggestions: any[] }> {
   const safeModel = (model && model.includes('gemini')) ? model : 'gemini-2.5-flash';
-  
+
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${safeModel}:generateContent?key=${apiKey}`, {
+    const response = await fetch(`${baseUrl}/models/${safeModel}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: `You are a precise form-filling assistant. Always respond with valid JSON only.\n\n${prompt}` }] }],
-        generationConfig: { temperature: 0.3, responseMimeType: "application/json" }
+        generationConfig: { temperature: 0.3, responseMimeType: 'application/json' },
       }),
     });
 
     if (!response.ok) {
       if ((response.status === 503 || response.status === 429) && attempt < 4) {
-        // Exponential backoff retry for "High Demand / Spike" errors
-        await new Promise(r => setTimeout(r, 2000 * attempt));
-        return callGemini(prompt, apiKey, model, attempt + 1);
+        // Exponential backoff for the "model is overloaded" spikes.
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        return callGemini(prompt, apiKey, model, baseUrl, attempt + 1);
       }
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error?.message || `Gemini API error: ${response.status}`);
     }
 
     const data = await response.json();
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    return parseAIResponse(content);
+    return parseAIResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || '');
   } catch (error: any) {
     if (attempt < 4 && (error.message.includes('fetch') || error.message.includes('Network'))) {
-      await new Promise(r => setTimeout(r, 2000 * attempt));
-      return callGemini(prompt, apiKey, model, attempt + 1);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      return callGemini(prompt, apiKey, model, baseUrl, attempt + 1);
     }
     throw error;
   }
-}
-
-// ─── Call Groq API ───
-async function callGroq(prompt: string, apiKey: string, model: string) {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: model || 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a precise form-filling assistant. Always respond with valid JSON only.',
-        },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.3,
-      max_completion_tokens: 4096,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `Groq API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  return parseAIResponse(content);
 }
 
 // ─── Parse AI response (extract JSON) ───
@@ -232,18 +235,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { fields, profile, settings } = message.payload;
     const prompt = buildPrompt(fields, profile, settings);
 
-    let apiCall;
     // Sanitize API keys to remove hidden unicode chars (like zero-width spaces) that break HTTP headers
     const sanitizeKey = (key: string | undefined) => (key || '').replace(/[^\x20-\x7E]/g, '').trim();
+    const { spec, apiKey, model, baseUrl } = getProviderConfig(settings);
+    const key = sanitizeKey(apiKey);
 
-    if (settings.aiProvider === 'gemini') {
-      apiCall = callGemini(prompt, sanitizeKey(settings.geminiApiKey), settings.geminiModel);
-    } else if (settings.aiProvider === 'anthropic') {
-      apiCall = callAnthropic(prompt, sanitizeKey(settings.anthropicApiKey), settings.anthropicModel);
-    } else if (settings.aiProvider === 'groq') {
-      apiCall = callGroq(prompt, sanitizeKey(settings.groqApiKey), settings.groqModel);
+    let apiCall: Promise<{ suggestions: any[] }>;
+    if (spec.kind === 'gemini') {
+      apiCall = callGemini(prompt, key, model, baseUrl!);
+    } else if (spec.kind === 'anthropic') {
+      apiCall = callAnthropic(prompt, key, model, baseUrl!);
     } else {
-      apiCall = callOpenAI(prompt, sanitizeKey(settings.openaiApiKey), settings.openaiModel);
+      apiCall = callOpenAICompatible(prompt, key, model, baseUrl!);
     }
 
     apiCall

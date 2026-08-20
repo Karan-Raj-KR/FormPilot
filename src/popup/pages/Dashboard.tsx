@@ -12,9 +12,8 @@ interface DashboardProps {
 export default function DashboardPage({ settings, navigateTo, profiles }: DashboardProps) {
   const activeProfile = profiles.find((p) => p.id === settings.activeProfileId) || profiles[0];
 
-  const hasApiKey = Boolean(
-    settings.openaiApiKey || settings.anthropicApiKey || settings.geminiApiKey || settings.groqApiKey
-  );
+  // Any configured provider counts — the list is open-ended now.
+  const hasApiKey = Object.values(settings.providers ?? {}).some((p) => p?.apiKey);
   const hasProfileSetup = Boolean(activeProfile?.data?.firstName || activeProfile?.data?.rawInfo);
 
   return (
@@ -48,7 +47,7 @@ export default function DashboardPage({ settings, navigateTo, profiles }: Dashbo
               </div>
               <div className="text-left">
                 <p className="text-[12px] font-semibold text-white">1. Configure AI Provider</p>
-                <p className="text-[10px] text-muted">{hasApiKey ? 'API Key configured' : 'Add your OpenAI/Claude key'}</p>
+                <p className="text-[10px] text-muted">{hasApiKey ? 'API key configured' : 'Add a key for any provider'}</p>
               </div>
             </div>
             {hasApiKey ? <span className="text-[10px] font-bold text-secondary-500">✓</span> : <ArrowRight size={14} className="text-primary-400 group-hover:translate-x-1 group-hover:text-secondary-400 transition-all" />}

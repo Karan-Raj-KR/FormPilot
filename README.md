@@ -39,8 +39,9 @@ Every developer, student, and professional wastes hours per week filling repetit
 | Multiple profiles (Personal/Work) | ❌ | ✅ |
 | Confidence scoring per field | ❌ | ✅ |
 | Payment vault + Password vault | ❌ | ✅ |
-| Your choice of AI model | ❌ | ✅ GPT-4o, Claude, Gemini, Groq |
-| Zero data sent to any server | ❌ | ✅ 100% local |
+| Your choice of AI model | ❌ | ✅ OpenAI, Claude, Gemini, Groq, OpenRouter, NVIDIA NIM, DeepSeek, Mistral, xAI, Ollama, or any OpenAI-compatible endpoint |
+| Zero data sent to any server | ❌ | ✅ Local by default |
+| Sync across machines and browsers | ❌ | ✅ Optional, end-to-end encrypted ([setup](docs/sync-setup.md)) |
 
 ---
 

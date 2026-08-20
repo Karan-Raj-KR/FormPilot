@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Home, List, Settings as SettingsIcon, Clock, UserCircle2, Sparkles, LayoutDashboard, ScanLine, LockKeyhole } from 'lucide-react';
+import { Settings as SettingsIcon, Clock, UserCircle2, LayoutDashboard, ScanLine, LockKeyhole, Cloud } from 'lucide-react';
 import type { Page, Profile, Settings, DetectedField } from '../shared/types';
-import { getProfiles, getSettings, addProfile, generateId } from '../shared/storage';
-import { DEFAULT_SETTINGS, EMPTY_PROFILE_DATA, PROFILE_COLORS, PROFILE_EMOJIS } from '../shared/constants';
+import { getProfiles, getSettings } from '../shared/storage';
+import { DEFAULT_SETTINGS } from '../shared/constants';
 
 import DashboardPage from './pages/Dashboard';
 import HomePage from './pages/Home';
@@ -12,6 +12,7 @@ import SettingsPage from './pages/Settings';
 import HistoryPage from './pages/History';
 import PaymentVaultPage from './pages/PaymentVault';
 import PasswordVaultPage from './pages/PasswordVault';
+import AccountPage from './pages/Account';
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -79,6 +80,7 @@ export default function App() {
     history: <HistoryPage />,
     paymentVault: <PaymentVaultPage navigateTo={navigateTo} />,
     passwordVault: <PasswordVaultPage navigateTo={navigateTo} />,
+    account: <AccountPage />,
   }[currentPage];
 
   return (
@@ -109,12 +111,13 @@ export default function App() {
       </main>
 
       {/* Navigation Bar */}
-      <nav className="flex items-center justify-between px-5 py-3 border-t border-[#27272a] bg-[#18181b]/80 backdrop-blur-md z-10">
+      <nav className="flex items-center justify-between px-2 py-3 border-t border-[#27272a] bg-[#18181b]/80 backdrop-blur-md z-10">
         <NavItem active={currentPage === 'dashboard'} icon={<LayoutDashboard size={18} />} label="Dash" onClick={() => navigateTo('dashboard')} />
         <NavItem active={currentPage === 'home' || currentPage === 'preview'} icon={<ScanLine size={18} />} label="Scan" onClick={() => navigateTo('home')} />
         <NavItem active={currentPage === 'profiles'} icon={<UserCircle2 size={18} />} label="Profiles" onClick={() => navigateTo('profiles')} />
         <NavItem active={currentPage === 'paymentVault' || currentPage === 'passwordVault'} icon={<LockKeyhole size={18} />} label="Vault" onClick={() => navigateTo('paymentVault')} />
         <NavItem active={currentPage === 'history'} icon={<Clock size={18} />} label="History" onClick={() => navigateTo('history')} />
+        <NavItem active={currentPage === 'account'} icon={<Cloud size={18} />} label="Sync" onClick={() => navigateTo('account')} />
         <NavItem active={currentPage === 'settings'} icon={<SettingsIcon size={18} />} label="Settings" onClick={() => navigateTo('settings')} />
       </nav>
     </div>
@@ -124,7 +127,7 @@ export default function App() {
 function NavItem({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <div 
-      className={`flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors duration-200 ${
+      className={`flex flex-1 flex-col items-center justify-center gap-1 cursor-pointer transition-colors duration-200 ${
         active ? 'text-primary-400 drop-shadow-[0_0_8px_rgba(14,165,233,0.4)]' : 'text-muted-dark hover:text-muted-light'
       }`}
       onClick={onClick}

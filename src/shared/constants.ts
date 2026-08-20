@@ -1,4 +1,7 @@
-import type { Profile, ProfileData, Settings, TonePreference, LengthPreference, FieldCategory } from './types';
+import type {
+  Profile, ProfileData, Settings, TonePreference, LengthPreference, FieldCategory,
+  ProviderSpec, ProviderConfig,
+} from './types';
 
 // ─── Default Profile Data ───
 export const EMPTY_PROFILE_DATA: ProfileData = {
@@ -68,14 +71,7 @@ export const DEFAULT_PROFILES: Profile[] = [
 // ─── Default Settings ───
 export const DEFAULT_SETTINGS: Settings = {
   aiProvider: 'openai',
-  openaiApiKey: '',
-  anthropicApiKey: '',
-  geminiApiKey: '',
-  groqApiKey: '',
-  openaiModel: 'gpt-4o',
-  anthropicModel: 'claude-opus-5',
-  geminiModel: 'gemini-2.5-flash',
-  groqModel: 'llama-3.3-70b-versatile',
+  providers: {},
   defaultTone: 'professional',
   defaultLength: 'moderate',
   activeProfileId: 'personal',
@@ -83,28 +79,98 @@ export const DEFAULT_SETTINGS: Settings = {
   showConfidence: true,
 };
 
-// ─── Model Options ───
-export const OPENAI_MODELS = [
-  { id: 'gpt-4o', name: 'GPT-4o', description: 'Most capable' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Fast & affordable' },
-  { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Previous gen' },
-];
+// ─── Providers ───
+// Adding a provider is one entry here. Anything exposing an OpenAI-compatible
+// /chat/completions endpoint uses kind 'openai' and needs no new request code.
+// `models` are suggestions for the datalist — the model field takes any string,
+// because OpenRouter and NIM each expose hundreds.
+export const PROVIDERS: Record<string, ProviderSpec> = {
+  openai: {
+    name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1',
+    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
+    keyUrl: 'https://platform.openai.com/api-keys', keyPlaceholder: 'sk-…',
+  },
+  anthropic: {
+    name: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1',
+    models: ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+    keyUrl: 'https://console.anthropic.com/settings/keys', keyPlaceholder: 'sk-ant-…',
+  },
+  gemini: {
+    name: 'Google Gemini', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    keyUrl: 'https://aistudio.google.com/app/apikey', keyPlaceholder: 'AIzaSy…',
+  },
+  groq: {
+    name: 'Groq', kind: 'openai', baseUrl: 'https://api.groq.com/openai/v1',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+    keyUrl: 'https://console.groq.com/keys', keyPlaceholder: 'gsk_…',
+  },
+  openrouter: {
+    name: 'OpenRouter', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1',
+    models: ['anthropic/claude-sonnet-5', 'openai/gpt-4o', 'google/gemini-2.5-flash', 'meta-llama/llama-3.3-70b-instruct'],
+    keyUrl: 'https://openrouter.ai/keys', keyPlaceholder: 'sk-or-…',
+    note: 'One key, hundreds of models. Paste any model id from openrouter.ai/models.',
+  },
+  nvidia: {
+    name: 'NVIDIA NIM', kind: 'openai', baseUrl: 'https://integrate.api.nvidia.com/v1',
+    models: ['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'deepseek-ai/deepseek-r1'],
+    keyUrl: 'https://build.nvidia.com', keyPlaceholder: 'nvapi-…',
+    note: 'Model ids come from build.nvidia.com — use the exact string shown there.',
+  },
+  deepseek: {
+    name: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    keyUrl: 'https://platform.deepseek.com/api_keys', keyPlaceholder: 'sk-…',
+  },
+  mistral: {
+    name: 'Mistral', kind: 'openai', baseUrl: 'https://api.mistral.ai/v1',
+    models: ['mistral-large-latest', 'mistral-small-latest'],
+    keyUrl: 'https://console.mistral.ai/api-keys', keyPlaceholder: '…',
+  },
+  together: {
+    name: 'Together AI', kind: 'openai', baseUrl: 'https://api.together.xyz/v1',
+    models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'Qwen/Qwen2.5-72B-Instruct-Turbo'],
+    keyUrl: 'https://api.together.xyz/settings/api-keys', keyPlaceholder: '…',
+  },
+  xai: {
+    name: 'xAI Grok', kind: 'openai', baseUrl: 'https://api.x.ai/v1',
+    models: ['grok-4', 'grok-3-mini'],
+    keyUrl: 'https://console.x.ai', keyPlaceholder: 'xai-…',
+  },
+  fireworks: {
+    name: 'Fireworks', kind: 'openai', baseUrl: 'https://api.fireworks.ai/inference/v1',
+    models: ['accounts/fireworks/models/llama-v3p3-70b-instruct'],
+    keyUrl: 'https://fireworks.ai/account/api-keys', keyPlaceholder: 'fw_…',
+  },
+  ollama: {
+    name: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1',
+    models: ['llama3.2', 'qwen2.5', 'mistral'],
+    keyPlaceholder: 'not required', editableBaseUrl: true,
+    note: 'Runs on your machine. Start it with OLLAMA_ORIGINS=chrome-extension://* ollama serve',
+  },
+  custom: {
+    name: 'Custom (OpenAI-compatible)', kind: 'openai', baseUrl: '',
+    models: [], keyPlaceholder: 'your API key', editableBaseUrl: true,
+    note: 'Any endpoint exposing POST /chat/completions. Give the base URL up to and including /v1.',
+  },
+};
 
-export const ANTHROPIC_MODELS = [
-  { id: 'claude-opus-5', name: 'Claude Opus 5', description: 'Most capable' },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', description: 'Excellent balance' },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', description: 'Fastest & cheapest' },
-];
-
-export const GEMINI_MODELS = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Fastest & most stable' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Next generation speed' }
-];
-
-export const GROQ_MODELS = [
-  { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', description: 'Best balance' },
-  { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B', description: 'Extremely fast' }
-];
+// Resolves the credentials + endpoint for a provider, falling back to the
+// registry defaults. Single source of truth for background and Settings alike.
+export function getProviderConfig(
+  settings: Settings,
+  id: string = settings.aiProvider,
+): ProviderConfig & { id: string; spec: ProviderSpec } {
+  const spec = PROVIDERS[id] ?? PROVIDERS.openai;
+  const saved = settings.providers?.[id] ?? { apiKey: '', model: '' };
+  return {
+    id,
+    spec,
+    apiKey: saved.apiKey ?? '',
+    model: saved.model || spec.models[0] || '',
+    baseUrl: (saved.baseUrl || spec.baseUrl || '').replace(/\/+$/, ''),
+  };
+}
 
 // ─── Tone Options ───
 export const TONE_OPTIONS: { id: TonePreference; label: string; icon: string }[] = [
@@ -143,7 +209,19 @@ export const STORAGE_KEYS = {
   HISTORY: 'formpilot_history',
   PAYMENT_CARDS: 'formpilot_payment_cards',
   PASSWORDS: 'formpilot_passwords',
+  SYNC_STATE: 'formpilot_sync_state',
 } as const;
+
+// Model ids that vendors have retired — cleared from saved settings on read so
+// an upgraded install doesn't keep calling an endpoint that now 404s.
+export const RETIRED_MODEL_IDS = [
+  'claude-3-7-sonnet-20250219',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-haiku-20241022',
+  'mixtral-8x7b-32768',
+  'gemini-1.5-pro',
+  'gemini-1.5-flash',
+];
 
 // ─── Category inference ───
 // Lives here rather than in the content script so it stays free of DOM access
