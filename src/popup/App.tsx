@@ -72,7 +72,7 @@ export default function App() {
 
   const PageComponent = {
     dashboard: <DashboardPage settings={settings} setSettings={setSettings} navigateTo={navigateTo} profiles={profiles} />,
-    home: <HomePage fields={fields} setFields={setFields} navigateTo={navigateTo} activeProfile={activeProfile} />,
+    home: <HomePage fields={fields} setFields={setFields} navigateTo={navigateTo} activeProfile={activeProfile} autoDetect={settings.autoDetect} />,
     preview: <PreviewPage fields={fields} setFields={setFields} navigateTo={navigateTo} activeProfile={activeProfile} activeTabUrl={activeTabUrl} />,
     profiles: <ProfilesPage profiles={profiles} setProfiles={setProfiles} activeProfileId={settings.activeProfileId} setSettings={setSettings} />,
     settings: <SettingsPage settings={settings} setSettings={setSettings} profiles={profiles} />,

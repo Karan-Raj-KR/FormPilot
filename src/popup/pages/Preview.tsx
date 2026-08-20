@@ -17,12 +17,12 @@ interface PreviewProps {
 
 function getCardValueForField(field: DetectedField, card: any): string {
   const combined = `${field.label} ${field.name} ${field.ariaLabel} ${field.placeholder}`.toLowerCase();
-  if (PAYMENT_FIELD_PATTERNS.cardNumber.test(combined))    return card.cardNumber;
-  if (PAYMENT_FIELD_PATTERNS.cvv.test(combined))           return card.cvv;
+  if (PAYMENT_FIELD_PATTERNS.cvv.test(combined))            return card.cvv;
   if (PAYMENT_FIELD_PATTERNS.cardholderName.test(combined)) return card.cardholderName;
-  if (PAYMENT_FIELD_PATTERNS.expiryFull.test(combined))    return `${card.expiryMonth}/${card.expiryYear.slice(-2)}`;
-  if (PAYMENT_FIELD_PATTERNS.expiryMonth.test(combined))   return card.expiryMonth;
-  if (PAYMENT_FIELD_PATTERNS.expiryYear.test(combined))    return card.expiryYear;
+  if (PAYMENT_FIELD_PATTERNS.expiryMonth.test(combined))    return card.expiryMonth;
+  if (PAYMENT_FIELD_PATTERNS.expiryYear.test(combined))     return card.expiryYear;
+  if (PAYMENT_FIELD_PATTERNS.expiryFull.test(combined))     return `${card.expiryMonth}/${String(card.expiryYear).slice(-2)}`;
+  if (PAYMENT_FIELD_PATTERNS.cardNumber.test(combined))     return card.cardNumber;
   return '';
 }
 
@@ -33,6 +33,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [savePrompt, setSavePrompt] = useState<{ username: string; password: string; domain: string } | null>(null);
   const [savingCred, setSavingCred] = useState(false);
+  const [showConfidence, setShowConfidence] = useState(true);
 
   const domain = (() => { try { return new URL(activeTabUrl).hostname; } catch { return ''; } })();
 
@@ -48,6 +49,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
 
     try {
       const settings = await getSettings();
+      setShowConfidence(settings.showConfidence);
 
       const [aiResponse, cards, domainPasswords] = await Promise.all([
         Promise.race([
@@ -140,9 +142,11 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
             profileName: activeProfile.name,
             fieldCount: fields.length,
             filledCount,
+            // Card numbers and passwords stay in the vault — history is a plain
+            // storage record that the History page renders in clear text.
             fields: fields.filter(f => f.status === 'filled').map(f => ({
               label: f.label || f.name,
-              value: f.suggestedValue,
+              value: isVaultField(f) ? '••••••••' : f.suggestedValue,
               category: f.category,
             })),
             timestamp: Date.now(),
@@ -330,7 +334,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
                       {vault && !isFilled && (
                         <span className="badge badge-blue !text-[9px]">🔒 Vault</span>
                       )}
-                      {!vault && field.confidence > 0 && field.confidence < 0.7 && (
+                      {showConfidence && !vault && field.confidence > 0 && field.confidence < 0.7 && (
                         <span className="badge badge-amber !text-[9px]">Low Conf</span>
                       )}
                       {isFilled && <span className="badge badge-green !text-[9px]">Filled</span>}
@@ -340,7 +344,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
                   <div className="relative group">
                     {field.tagName === 'textarea' ? (
                       <textarea
-                        className={`glass-textarea text-sm w-full font-medium ${isFilled ? 'text-green-400' : 'text-primary-100'} ${!vault && field.confidence < 0.7 ? 'border-amber-500/50' : ''}`}
+                        className={`glass-textarea text-sm w-full font-medium ${isFilled ? 'text-green-400' : 'text-primary-100'} ${showConfidence && !vault && field.confidence < 0.7 ? 'border-amber-500/50' : ''}`}
                         value={field.suggestedValue}
                         onChange={(e) => updateSuggestedValue(field.id, e.target.value)}
                         placeholder={noEntry ? (field.category === 'payment' ? 'No card in vault' : 'No credentials in vault') : 'Missing value…'}
@@ -350,7 +354,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
                     ) : (
                       <input
                         type={vault && field.type === 'password' && !isFilled ? 'password' : 'text'}
-                        className={`glass-input text-sm w-full font-medium ${isFilled ? 'text-green-400' : 'text-primary-100'} ${!vault && field.confidence < 0.7 ? 'border-amber-500/50' : ''}`}
+                        className={`glass-input text-sm w-full font-medium ${isFilled ? 'text-green-400' : 'text-primary-100'} ${showConfidence && !vault && field.confidence < 0.7 ? 'border-amber-500/50' : ''}`}
                         value={field.suggestedValue}
                         onChange={(e) => updateSuggestedValue(field.id, e.target.value)}
                         placeholder={noEntry ? (field.category === 'payment' ? 'No card in vault' : 'No credentials in vault') : 'Missing value…'}
@@ -407,7 +411,7 @@ export default function Preview({ fields, setFields, navigateTo, activeProfile, 
                 <div className="w-full bg-[#112035] rounded-full h-1.5 mb-2 overflow-hidden">
                   <div
                     className="bg-primary-500 h-1.5 rounded-full transition-all duration-300"
-                    style={{ width: `${(progress.done / progress.total) * 100}%` }}
+                    style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
                   ></div>
                 </div>
                 <span className="text-xs font-medium animate-pulse">Filling {progress.done} of {progress.total}…</span>

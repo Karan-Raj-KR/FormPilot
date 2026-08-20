@@ -8,9 +8,10 @@ interface HomeProps {
   setFields: React.Dispatch<React.SetStateAction<DetectedField[]>>;
   navigateTo: (page: Page) => void;
   activeProfile: Profile;
+  autoDetect: boolean;
 }
 
-export default function Home({ fields, setFields, navigateTo, activeProfile }: HomeProps) {
+export default function Home({ fields, setFields, navigateTo, activeProfile, autoDetect }: HomeProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,17 +27,15 @@ export default function Home({ fields, setFields, navigateTo, activeProfile }: H
       if (!tab.id) throw new Error('No active tab found');
       if (tab.url?.startsWith('chrome://')) throw new Error('Cannot run on internal Chrome pages');
 
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_FIELDS' }).catch((err) => {
-        // Fallback if content script isn't injected yet
-        if (err.message.includes('Receiving end does not exist')) {
-          chrome.scripting.executeScript({
-            target: { tabId: tab.id! },
-            files: ['content.js']
-          });
-          return new Promise(resolve => setTimeout(resolve, 500))
-            .then(() => chrome.tabs.sendMessage(tab.id!, { type: 'SCAN_FIELDS' }));
-        }
-        throw err;
+      const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_FIELDS' }).catch(async (err) => {
+        // Fallback if content script isn't injected yet (e.g. the page was open
+        // before the extension was installed or reloaded).
+        if (!String(err?.message).includes('Receiving end does not exist')) throw err;
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id! },
+          files: ['content.js'],
+        });
+        return chrome.tabs.sendMessage(tab.id!, { type: 'SCAN_FIELDS' });
       });
 
       if (response?.fields) {
@@ -54,7 +53,7 @@ export default function Home({ fields, setFields, navigateTo, activeProfile }: H
 
   // Initial scan if empty
   useEffect(() => {
-    if (fields.length === 0 && !error) {
+    if (autoDetect && fields.length === 0 && !error) {
       scanPage();
     }
   }, []);

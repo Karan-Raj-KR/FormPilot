@@ -109,8 +109,10 @@ async function callAnthropic(prompt: string, apiKey: string, model: string) {
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: model && !model.includes('-4-') && !model.includes('opus') ? model : 'claude-3-7-sonnet-20250219',
-      max_tokens: 4096,
+      model: model || 'claude-opus-5',
+      // Current models think before answering; 4096 can be consumed by reasoning
+      // and truncate the JSON body mid-object.
+      max_tokens: 16000,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -147,11 +149,6 @@ async function callGemini(prompt: string, apiKey: string, model: string, attempt
         return callGemini(prompt, apiKey, model, attempt + 1);
       }
       const err = await response.json().catch(() => ({}));
-      // On final failure of a spike error, we silently ignore to satisfy user requirement: "remove this error" 
-      // by returning an empty suggestion array so the form just stops cleanly without a red box.
-      if (err.error?.message?.includes('high demand') || err.error?.message?.includes('Spikes')) {
-        return { suggestions: [] };
-      }
       throw new Error(err.error?.message || `Gemini API error: ${response.status}`);
     }
 
@@ -201,30 +198,23 @@ async function callGroq(prompt: string, apiKey: string, model: string) {
 
 // ─── Parse AI response (extract JSON) ───
 function parseAIResponse(content: string): { suggestions: any[] } {
-  // Try direct parse first
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed.suggestions) return parsed;
-  } catch {
-    // Try to extract JSON from markdown code blocks
-    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1].trim());
-        if (parsed.suggestions) return parsed;
-      } catch {
-        /* fallthrough */
-      }
-    }
-    // Try to find JSON object in the text
-    const braceMatch = content.match(/\{[\s\S]*"suggestions"[\s\S]*\}/);
-    if (braceMatch) {
-      try {
-        const parsed = JSON.parse(braceMatch[0]);
-        if (parsed.suggestions) return parsed;
-      } catch {
-        /* fallthrough */
-      }
+  // Every candidate is tried, not just the ones after a thrown parse error:
+  // a model that answers with a bare array parses fine yet has no `suggestions`.
+  const candidates = [
+    content,
+    content.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1],
+    content.match(/\{[\s\S]*"suggestions"[\s\S]*\}/)?.[0],
+    content.match(/\[[\s\S]*\]/)?.[0],
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate.trim());
+      if (Array.isArray(parsed)) return { suggestions: parsed };
+      if (Array.isArray(parsed.suggestions)) return parsed;
+    } catch {
+      /* try the next candidate */
     }
   }
   throw new Error('Failed to parse AI response. Please try again.');
@@ -261,11 +251,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => sendResponse({ suggestions: [], error: error.message }));
 
     return true; // keep channel open for async response
-  }
-
-  if (message.type === 'DOM_CHANGED') {
-    // Could be used to notify popup of DOM changes
-    return false;
   }
 });
 

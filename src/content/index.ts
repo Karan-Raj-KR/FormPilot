@@ -3,6 +3,8 @@
    Scans DOM for form fields, injects filled values.
    ───────────────────────────────────────────────── */
 
+import { inferCategory } from '../shared/constants';
+
 // ─── Unique selector generator ───
 function generateSelector(el: Element): string {
   if (el.id) return `#${CSS.escape(el.id)}`;
@@ -146,36 +148,8 @@ function findGroupLabel(el: Element): string {
   return '';
 }
 
-// ─── Category inference ───
-function inferCategory(label: string, type: string, name: string): string {
-  const combined = `${label} ${name} ${type}`.toLowerCase();
-
-  if (/email/i.test(combined)) return 'contact';
-  if (/phone|tel|mobile/i.test(combined)) return 'contact';
-  if (/first\s?name|last\s?name|full\s?name|^name$/i.test(combined)) return 'personal';
-  if (/address|street|apt|suite/i.test(combined)) return 'address';
-  if (/city|state|province|zip|postal|country/i.test(combined)) return 'address';
-  if (/linkedin|github|twitter|website|portfolio|url/i.test(combined)) return 'social';
-  if (/company|organization|employer|role|title|position|job/i.test(combined)) return 'professional';
-  if (/school|university|college|degree|gpa|education|major/i.test(combined)) return 'education';
-  if (/project|describe|tell\s?us|why|essay|motivation|about|bio|summary|cover/i.test(combined)) return 'essay';
-  if (/skill|technology|stack|experience/i.test(combined)) return 'professional';
-
-  if (type === 'textarea') return 'essay';
-  return 'other';
-}
-
 // ─── Scan all form fields ───
 function scanFields() {
-  const selector = [
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"])',
-    ':not([type="reset"]):not([type="image"]):not([type="file"]):not([type="checkbox"])',
-    ':not([type="radio"]),',
-    'textarea,',
-    'select',
-  ].join('');
-
-  // Cleaner selector
   const elements = document.querySelectorAll(
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="file"]), textarea, select, [role="radio"], [role="checkbox"], [role="listbox"], [role="combobox"]'
   );
@@ -288,17 +262,20 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
     const optionByValue = Array.from(select.options).find(
       (o) => o.value.toLowerCase() === value.toLowerCase()
     );
+    // Exact text match first — "India" must not land on "Indiana".
+    const optionByExactText = Array.from(select.options).find(
+      (o) => o.text.trim().toLowerCase() === value.trim().toLowerCase()
+    );
     const optionByText = Array.from(select.options).find(
       (o) => o.text.toLowerCase().includes(value.toLowerCase())
     );
-    const match = optionByValue || optionByText;
-    if (match) {
-      select.value = match.value;
-      select.dispatchEvent(new Event('focus', { bubbles: true }));
-      select.dispatchEvent(new Event('input', { bubbles: true }));
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      select.dispatchEvent(new Event('blur', { bubbles: true }));
-    }
+    const match = optionByValue || optionByExactText || optionByText;
+    if (!match) return false;
+    select.value = match.value;
+    select.dispatchEvent(new Event('focus', { bubbles: true }));
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    select.dispatchEvent(new Event('blur', { bubbles: true }));
   } else if (tagName === 'textarea') {
     element.dispatchEvent(new Event('focus', { bubbles: true }));
     const nativeSetter = Object.getOwnPropertyDescriptor(
@@ -416,36 +393,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     }
-    case 'PROCEED_TO_NEXT_PAGE': {
-      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn, a.button')) as HTMLElement[];
-      const nextBtn = buttons.find(b => {
-          const text = (b.textContent || (b as HTMLInputElement).value || '').toLowerCase().trim();
-          return text === 'next' || text === 'continue' || text.includes('next page');
-      });
-      if (nextBtn) {
-          nextBtn.click();
-          sendResponse({ success: true, clicked: true });
-      } else {
-          sendResponse({ success: true, clicked: false });
-      }
-      break;
-    }
   }
   return false; // all responses are synchronous
-});
-
-// ─── Auto-scan on page load (for popup to detect) ───
-// MutationObserver for SPA form detection
-const observer = new MutationObserver(() => {
-  // Notify popup that DOM changed (new fields may be available)
-  try {
-    chrome.runtime.sendMessage({ type: 'DOM_CHANGED' });
-  } catch {
-    // Popup may not be open
-  }
-});
-
-observer.observe(document.body, {
-  childList: true,
-  subtree: true,
 });

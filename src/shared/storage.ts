@@ -1,5 +1,8 @@
 import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry } from './types';
-import { DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS } from './constants';
+import {
+  DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS,
+  OPENAI_MODELS, ANTHROPIC_MODELS, GEMINI_MODELS, GROQ_MODELS,
+} from './constants';
 
 // ─── Chrome storage detection ───
 const isChromeStorage =
@@ -66,7 +69,23 @@ export async function deleteProfile(profileId: string): Promise<Profile[]> {
 // ─── Settings ───
 export async function getSettings(): Promise<Settings> {
   const settings = await getItem<Settings>(STORAGE_KEYS.SETTINGS);
-  return settings ?? DEFAULT_SETTINGS;
+  if (!settings) return DEFAULT_SETTINGS;
+
+  // Existing installs have retired model ids saved (e.g. claude-3-7-sonnet, mixtral-8x7b).
+  // Those 404 at the provider and leave the model dropdown blank, so reset them.
+  const merged = { ...DEFAULT_SETTINGS, ...settings };
+  const valid: Record<string, string[]> = {
+    openaiModel: OPENAI_MODELS.map((m) => m.id),
+    anthropicModel: ANTHROPIC_MODELS.map((m) => m.id),
+    geminiModel: GEMINI_MODELS.map((m) => m.id),
+    groqModel: GROQ_MODELS.map((m) => m.id),
+  };
+  for (const [key, ids] of Object.entries(valid)) {
+    if (!ids.includes((merged as any)[key])) {
+      (merged as any)[key] = (DEFAULT_SETTINGS as any)[key];
+    }
+  }
+  return merged;
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
