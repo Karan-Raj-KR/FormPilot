@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Clock, UserCircle2, LayoutDashboard, ScanLine, LockKeyhole, Cloud, Brain } from 'lucide-react';
 import type { Page, Profile, Settings, DetectedField, PageContext } from '../shared/types';
 import { getProfiles, getSettings } from '../shared/storage';
+import { useSessionState, SESSION_KEYS } from './session';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { clearHighlights } from './scan';
 
@@ -17,15 +18,35 @@ import AccountPage from './pages/Account';
 import MemoryPage from './pages/Memory';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('home');
+  // Which tab the user was on survives the popup being torn down: Chrome
+  // destroys it on every focus loss, and landing back on Home each time makes
+  // the extension feel like it forgot what you were doing.
+  const [currentPage, setCurrentPage, pageRestored] = useSessionState<Page>(SESSION_KEYS.PAGE, 'home');
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [fields, setFields] = useState<DetectedField[]>([]);
-  const [pageContext, setPageContext] = useState<PageContext | null>(null);
+  /* A scan costs a round trip and a fill costs an API call, so neither should
+     be thrown away just because the popup lost focus. Kept against the URL it
+     came from: restoring one page's fields onto another would point every
+     selector at the wrong document. */
+  const [scan, setScan, scanRestored] = useSessionState<{ url: string; fields: DetectedField[]; context: PageContext | null }>(
+    SESSION_KEYS.SCAN, { url: '', fields: [], context: null },
+  );
   const [isLoading, setIsLoading] = useState(true);
 
   // Tab state
   const [activeTabUrl, setActiveTabUrl] = useState<string>('');
+
+  const samePage = Boolean(activeTabUrl) && scan.url === activeTabUrl;
+  const fields = samePage ? scan.fields : [];
+  const pageContext = samePage ? scan.context : null;
+  const setFields = (next: DetectedField[] | ((prev: DetectedField[]) => DetectedField[])) =>
+    setScan((prev) => ({
+      url: activeTabUrl,
+      context: prev.url === activeTabUrl ? prev.context : null,
+      fields: typeof next === 'function' ? next(prev.url === activeTabUrl ? prev.fields : []) : next,
+    }));
+  const setPageContext = (context: PageContext | null) =>
+    setScan((prev) => ({ ...prev, url: activeTabUrl, context }));
 
   useEffect(() => {
     Promise.all([getProfiles(), getSettings()]).then(([p, s]) => {
@@ -48,7 +69,9 @@ export default function App() {
 
   const activeProfile = profiles.find((p) => p.id === settings.activeProfileId) || profiles[0];
 
-  if (isLoading) {
+  // Waiting for the restore avoids a flash of the Home tab, and stops Home's
+  // auto-scan from firing over results that are about to come back.
+  if (isLoading || !pageRestored || !scanRestored) {
     return (
       <div className="flex items-center justify-center h-full bg-[#09090b]">
         <div className="w-8 h-8 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />

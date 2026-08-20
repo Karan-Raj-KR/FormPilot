@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Plus, Edit2, Trash2, CheckCircle2, ChevronDown, ChevronUp, Copy, Check,
   Copy as Duplicate, AlertTriangle, ShieldAlert, Sparkles, X,
@@ -14,10 +14,10 @@ import {
   validateProfile, findSecrets, profileCompleteness, missingFields,
   normalizeProfile, LIMITS,
 } from '../../shared/profile';
-import {
-  fileToText, mergeExtraction, ACCEPTED_TYPES,
-  type ExtractedProfile,
-} from '../../shared/resume';
+import { mergeExtraction, type ExtractedProfile } from '../../shared/resume';
+import { fileToText, ACCEPTED_TYPES } from '../../shared/resume-file';
+import { getJob, setJob, onJobChange, type ImportJob } from '../../shared/jobs';
+import { useSessionState, SESSION_KEYS } from '../session';
 
 interface ProfilesProps {
   profiles: Profile[];
@@ -51,22 +51,132 @@ Do not include passwords, card numbers, national ID numbers or any other secret.
 Format it as clean plain text — no markdown, no headers — so I can paste it directly into a form-filling assistant.`;
 
 export default function Profiles({ profiles, setProfiles, activeProfileId, setSettings }: ProfilesProps) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [openSection, setOpenSection] = useState<Section>('raw');
-  const [formData, setFormData] = useState<Partial<Profile>>({});
+  /* The editor lives in session storage, not component state. Chrome destroys
+     the popup whenever it loses focus — clicking the page behind it, opening a
+     file chooser — and a half-typed profile should still be there afterwards. */
+  const [draft, setDraft, draftRestored] = useSessionState<{
+    editingId: string | null;
+    isCreating: boolean;
+    openSection: Section;
+    formData: Partial<Profile>;
+  }>(SESSION_KEYS.PROFILE_DRAFT, { editingId: null, isCreating: false, openSection: 'raw', formData: {} });
+
+  const { editingId, isCreating, openSection, formData } = draft;
+  const setEditingId = (editingId: string | null) => setDraft((d) => ({ ...d, editingId }));
+  const setIsCreating = (isCreating: boolean) => setDraft((d) => ({ ...d, isCreating }));
+  const setOpenSection = (openSection: Section) => setDraft((d) => ({ ...d, openSection }));
+  const setFormData = (next: Partial<Profile> | ((prev: Partial<Profile>) => Partial<Profile>)) =>
+    setDraft((d) => ({ ...d, formData: typeof next === 'function' ? next(d.formData) : next }));
+  const closeEditor = () => setDraft({ editingId: null, isCreating: false, openSection: 'raw', formData: {} });
   const [showErrors, setShowErrors] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
-  const [importState, setImportState] = useState<'idle' | 'reading' | 'thinking'>('idle');
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importResult, setImportResult] = useState<{ extracted: ExtractedProfile; text: string; fileName: string } | null>(null);
-  const scrollView = useRef<HTMLDivElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const issues = useMemo(() => validateProfile(formData), [formData]);
   const secrets = useMemo(() => findSecrets(formData), [formData]);
   const errors = issues.filter((i) => i.severity === 'error');
   const issueFor = (field: string) => issues.find((i) => i.field === field);
+
+  const [job, setJobState] = useState<ImportJob | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const [undoSnapshot, setUndoSnapshot] = useState<Partial<Profile> | null>(null);
+  const [autoFilled, setAutoFilled] = useState<string[] | null>(null);
+  const lastSummarySent = useRef('');
+  const scrollView = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  /* The job runs in the background and reports through storage, so a result
+     that arrived while the popup was shut is still waiting when it reopens. */
+  useEffect(() => {
+    getJob().then(setJobState);
+    return onJobChange(setJobState);
+  }, []);
+
+  // A draft that came back from session storage carries text that was already
+  // handled before the popup closed.
+  useEffect(() => {
+    if (draftRestored && !lastSummarySent.current) {
+      lastSummarySent.current = (draft.formData.data?.rawInfo ?? '').trim();
+    }
+  }, [draftRestored]);
+
+  // A summary import fills the profile the moment it lands — that is the point
+  // of pasting a summary. A résumé is shown for review first.
+  useEffect(() => {
+    if (job?.status !== 'done' || !job.result) return;
+    if (job.source !== 'summary') return;
+    applyExtraction(job.result, job.text ?? '', false);
+    setAutoFilled(job.result.filled);
+    void setJob(null);
+  }, [job?.id, job?.status]);
+
+  const startImport = async (text: string, source: 'resume' | 'summary', label: string) => {
+    setImportError(null);
+    const pending: ImportJob = {
+      id: String(Date.now()), status: 'running', source, label, startedAt: Date.now(), text,
+    };
+    setJobState(pending);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'EXTRACT_PROFILE', text, source, label, jobId: pending.id,
+      });
+      if (!response?.started) throw new Error('The extension background did not start the import. Reload the extension and retry.');
+    } catch (err: any) {
+      setJobState(null);
+      setImportError(err?.message ?? 'Could not start the import.');
+    }
+  };
+
+  const importResume = async (file: File) => {
+    setImportError(null);
+    setReading(true);
+    try {
+      const text = await fileToText(file);
+      await startImport(text, 'resume', file.name);
+    } catch (err: any) {
+      setImportError(err?.message ?? 'Could not read that file.');
+    } finally {
+      setReading(false);
+    }
+  };
+
+  /* Pasting an LLM summary into "About you" should populate the rest of the
+     form by itself — the user has already given us everything, they should not
+     have to retype it into twenty boxes. */
+  const maybeImportSummary = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed.length < 200) return;                 // too short to be a profile
+    // Seeded with whatever was in the box when the editor opened, so merely
+    // clicking through an existing profile never spends an API call.
+    if (trimmed === lastSummarySent.current) return;
+    if (job?.status === 'running') return;
+    lastSummarySent.current = trimmed;
+    void startImport(trimmed, 'summary', 'your summary');
+  };
+
+  const applyExtraction = (extracted: ExtractedProfile, text: string, overwrite: boolean) => {
+    setUndoSnapshot(structuredClone(draft.formData));
+    setFormData((prev) => mergeExtraction(prev, extracted, text, overwrite) as Partial<Profile>);
+  };
+
+  const applyImport = (overwrite: boolean) => {
+    if (job?.status !== 'done' || !job.result) return;
+    applyExtraction(job.result, job.text ?? '', overwrite);
+    setAutoFilled(job.result.filled);
+    void setJob(null);
+    setJobState(null);
+    setOpenSection('basic');
+    scrollView.current?.scrollTo(0, 0);
+  };
+
+  const undoImport = () => {
+    if (!undoSnapshot) return;
+    setFormData(undoSnapshot);
+    setUndoSnapshot(null);
+    setAutoFilled(null);
+  };
+
+  const dismissJob = () => { void setJob(null); setJobState(null); };
 
   const copyPrompt = async () => {
     await navigator.clipboard.writeText(LLM_CONTEXT_PROMPT);
@@ -74,53 +184,18 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
     setTimeout(() => setPromptCopied(false), 2500);
   };
 
-  /* Résumé import. Text is extracted here on the device; only that text is
-     sent to the provider the user already configured. Nothing is written into
-     the profile until they have seen what was found. */
-  const importResume = async (file: File) => {
-    setImportError(null);
-    setImportResult(null);
-    setImportState('reading');
-    try {
-      const text = await fileToText(file);
-      setImportState('thinking');
-      const response = await chrome.runtime.sendMessage({ type: 'EXTRACT_PROFILE', text });
-      if (!response) throw new Error('The extension background did not respond. Reload the extension and retry.');
-      if (response.error) throw new Error(response.error);
-      if (!response.profile?.filled?.length) {
-        throw new Error('Nothing recognisable was found in that file. Check it is a résumé, or paste the text into “About you”.');
-      }
-      setImportResult({ extracted: response.profile, text, fileName: file.name });
-    } catch (err: any) {
-      setImportError(err?.message ?? 'Could not read that file.');
-    } finally {
-      setImportState('idle');
-    }
-  };
-
-  const applyImport = (overwrite: boolean) => {
-    if (!importResult) return;
-    setFormData((prev) => mergeExtraction(prev, importResult.extracted, importResult.text, overwrite));
-    setImportResult(null);
-    setOpenSection('basic');
-    scrollView.current?.scrollTo(0, 0);
-  };
-
   const startEdit = (profile: Profile) => {
-    setFormData(structuredClone(profile));
-    setEditingId(profile.id);
-    setIsCreating(false);
+    lastSummarySent.current = (profile.data?.rawInfo ?? '').trim();
+    setDraft({ editingId: profile.id, isCreating: false, openSection: 'raw', formData: structuredClone(profile) });
     setShowErrors(false);
-    setOpenSection('raw');
-    setImportResult(null);
     setImportError(null);
     setTimeout(() => scrollView.current?.scrollTo(0, 0), 10);
   };
 
   const startCreate = (from?: Profile) => {
-    setFormData(from
+    const blank = from
       ? { ...structuredClone(from), name: `${from.name} copy` }
-      : {
+      : ({
           name: '',
           color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length],
           emoji: PROFILE_EMOJIS[profiles.length % PROFILE_EMOJIS.length],
@@ -128,11 +203,11 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
           systemPrompt: '',
           tonePreference: 'professional',
           lengthPreference: 'moderate',
-        });
-    setEditingId(null);
-    setIsCreating(true);
+        } as Partial<Profile>);
+    lastSummarySent.current = (blank.data?.rawInfo ?? '').trim();
+    setDraft({ editingId: null, isCreating: true, openSection: 'raw', formData: blank });
     setShowErrors(false);
-    setOpenSection('raw');
+    setImportError(null);
     setTimeout(() => scrollView.current?.scrollTo(0, 0), 10);
   };
 
@@ -158,8 +233,7 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
     } else if (editingId) {
       setProfiles(await updateProfile({ ...clean, id: editingId, updatedAt: Date.now() } as Profile));
     }
-    setEditingId(null);
-    setIsCreating(false);
+    closeEditor();
   };
 
   const removeProfile = async (id: string, e: React.MouseEvent) => {
@@ -306,7 +380,7 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
   return (
     <div className="flex flex-col h-full -mx-4 -my-4 h-[calc(100%+2rem)] bg-[#09090b]" ref={scrollView}>
       <div className="flex items-center justify-between p-4 border-b border-[#27272a] sticky top-0 bg-[#09090b]/95 backdrop-blur-md z-20">
-        <button className="btn-ghost !text-xs" onClick={() => { setEditingId(null); setIsCreating(false); }}>Cancel</button>
+        <button className="btn-ghost !text-xs" onClick={closeEditor}>Cancel</button>
         <span className="font-semibold text-sm">{isCreating ? 'New profile' : 'Edit profile'}</span>
         <button className="btn-primary !px-3 !py-1.5 !text-xs" onClick={saveForm}>Save</button>
       </div>
@@ -325,18 +399,18 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
           }}
         />
 
-        {importResult ? (
+        {job?.status === 'done' && job.result ? (
           <div className="glass-card-static p-3 space-y-3 border-primary-500/40 bg-primary-500/5">
             <div className="flex items-start gap-2">
               <FileText size={14} className="text-primary-400 shrink-0 mt-0.5" />
               <div className="min-w-0">
-                <p className="text-xs font-semibold">Found {importResult.extracted.filled.length} things in {importResult.fileName}</p>
+                <p className="text-xs font-semibold">Found {job.result.filled.length} things in {job.label}</p>
                 <p className="text-[10px] text-muted mt-0.5">Review before it goes in — nothing is saved yet.</p>
               </div>
             </div>
 
             <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
-              {Object.entries(importResult.extracted.data).map(([key, value]) => (
+              {Object.entries(job.result.data).map(([key, value]) => (
                 key === 'customFields' ? (
                   Object.entries(value as Record<string, string>).map(([k, v]) => (
                     <Row key={k} label={k} value={v} tag="custom" />
@@ -345,9 +419,7 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
                   <Row key={key} label={humanize(key)} value={String(value)} />
                 )
               ))}
-              {importResult.extracted.systemPrompt && (
-                <Row label="Custom instructions" value={importResult.extracted.systemPrompt} tag="style" />
-              )}
+              {job.result.systemPrompt && <Row label="Custom instructions" value={job.result.systemPrompt} tag="style" />}
             </div>
 
             <div className="flex gap-2">
@@ -357,22 +429,27 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
               <button className="btn-secondary !py-1.5 !text-xs" onClick={() => applyImport(true)}>
                 Replace all
               </button>
-              <button className="btn-ghost !p-1.5" onClick={() => setImportResult(null)} title="Discard">
+              <button className="btn-ghost !p-1.5" onClick={dismissJob} title="Discard">
                 <X size={14} />
               </button>
             </div>
           </div>
+        ) : job?.status === 'running' || reading ? (
+          <div className="glass-card-static p-3 flex items-center gap-2.5">
+            <Loader2 size={15} className="animate-spin text-primary-400 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold">
+                {reading ? 'Reading the file…' : `Pulling details out of ${job?.label ?? 'your text'}…`}
+              </p>
+              <p className="text-[10px] text-muted mt-0.5">
+                Keeps running if you close this — come back and it will be here.
+              </p>
+            </div>
+          </div>
         ) : (
           <div className="glass-card-static p-3 space-y-2">
-            <button
-              className="btn-secondary w-full !py-2.5 !text-xs"
-              disabled={importState !== 'idle'}
-              onClick={() => fileInput.current?.click()}
-            >
-              {importState === 'idle' ? <FileUp size={14} /> : <Loader2 size={14} className="animate-spin" />}
-              {importState === 'reading' ? 'Reading file…'
-                : importState === 'thinking' ? 'Pulling out your details…'
-                : 'Import from résumé'}
+            <button className="btn-secondary w-full !py-2.5 !text-xs" onClick={() => fileInput.current?.click()}>
+              <FileUp size={14} /> Import from résumé
             </button>
             <p className="text-[10px] text-muted-dark leading-relaxed text-center">
               PDF, DOCX, RTF, TXT or MD. Read on this device; the text is then sent to
@@ -381,10 +458,27 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
           </div>
         )}
 
-        {importError && (
+        {/* Result of an automatic fill from a pasted summary */}
+        {autoFilled && (
+          <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 flex items-center gap-2">
+            <Check size={14} className="text-green-400 shrink-0" />
+            <p className="text-[11px] text-green-300 flex-1">
+              Filled {autoFilled.length} field{autoFilled.length === 1 ? '' : 's'} from your summary.
+            </p>
+            {undoSnapshot && (
+              <button className="btn-ghost !py-1 !px-2 !text-[10px]" onClick={undoImport}>Undo</button>
+            )}
+            <button className="btn-ghost !p-1" onClick={() => setAutoFilled(null)}><X size={12} /></button>
+          </div>
+        )}
+
+        {(importError || job?.status === 'error') && (
           <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
             <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-red-300 leading-relaxed">{importError}</p>
+            <p className="text-[11px] text-red-300 leading-relaxed flex-1">{importError ?? job?.error}</p>
+            <button className="btn-ghost !p-1" onClick={() => { setImportError(null); dismissJob(); }}>
+              <X size={12} />
+            </button>
           </div>
         )}
 
@@ -487,8 +581,18 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
             className={`glass-textarea !min-h-[130px] font-mono text-[11px] ${showErrors && issueFor('rawInfo') ? '!border-red-500/60' : ''}`}
             value={data.rawInfo}
             onChange={(e) => setField('rawInfo', e.target.value)}
-            placeholder="Everything about you: résumé, bio, achievements, preferences. The AI searches this whenever a form asks something your other fields don't cover."
+            // Pasting is the common case, and waiting for blur after a paste
+            // feels broken — so both trigger the fill.
+            onPaste={(e) => {
+              const pasted = e.clipboardData.getData('text');
+              if (pasted) setTimeout(() => maybeImportSummary(pasted), 0);
+            }}
+            onBlur={(e) => maybeImportSummary(e.target.value)}
+            placeholder="Everything about you: résumé, bio, achievements, preferences. Paste an LLM summary here and the rest of this form fills itself."
           />
+          <p className="text-[10px] text-muted-dark leading-relaxed">
+            Paste a summary and the fields below fill in automatically.
+          </p>
         </Accordion>
 
         {/* Basics */}

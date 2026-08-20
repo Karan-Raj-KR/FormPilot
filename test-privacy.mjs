@@ -133,7 +133,8 @@ assert.ok(validateProfile({ name: 'Work', data: { phone: 'call me' } }).every((i
 console.log('✅ profile guards OK');
 
 /* ─── 10. Résumé import: the model's answer is untrusted output ─── */
-import { sanitizeExtraction, mergeExtraction, fileToText } from './src/shared/resume.ts';
+import { sanitizeExtraction, mergeExtraction } from './src/shared/resume.ts';
+import { fileToText } from './src/shared/resume-file.ts';
 
 // Only known profile keys survive. Anything else the model emits is dropped.
 const hostile = sanitizeExtraction({

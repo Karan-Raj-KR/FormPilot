@@ -1,6 +1,7 @@
 import { getProviderConfig, isSensitiveField, SENSITIVE_VALUE } from '../shared/constants';
 import { LIMITS as PROFILE_LIMITS } from '../shared/profile';
 import { buildResumePrompt, sanitizeExtraction, RESUME_LIMITS } from '../shared/resume';
+import { setJob, JOB_TIMEOUT_MS, type ImportJob } from '../shared/jobs';
 import { remember } from '../shared/memory';
 import { autoSync } from '../shared/sync';
 import { getSyncState } from '../shared/sync';
@@ -375,18 +376,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  /* Résumé import. The text was extracted on the user's machine; this only
-     asks the model they already configured to structure it. */
+  /* Résumé / summary import.
+
+     Started as a job rather than answered over the message port: a Chrome
+     popup is destroyed as soon as it loses focus — opening a file chooser is
+     enough — and the reply would then land nowhere, leaving a spinner forever.
+     Progress goes to storage.session instead, which any later popup can read. */
   if (message.type === 'EXTRACT_PROFILE') {
-    getSettings()
-      .then((settings) => askForJson(
-        settings,
-        buildResumePrompt(String(message.text ?? '').slice(0, RESUME_LIMITS.text)),
-        'You extract structured data from documents. You reply with one JSON object and nothing else. You never invent details that are not in the source, and you never copy secrets out of it.',
-      ))
-      .then((parsed) => sendResponse({ profile: sanitizeExtraction(parsed) }))
-      .catch((error) => sendResponse({ error: error.message }));
-    return true;
+    const job: ImportJob = {
+      id: String(message.jobId ?? Date.now()),
+      status: 'running',
+      source: message.source === 'summary' ? 'summary' : 'resume',
+      label: String(message.label ?? 'your document'),
+      startedAt: Date.now(),
+      text: String(message.text ?? ''),
+    };
+
+    setJob(job).then(() => getSettings())
+      .then((settings) => Promise.race([
+        askForJson(
+          settings,
+          buildResumePrompt(job.text!.slice(0, RESUME_LIMITS.text)),
+          'You extract structured data from documents. You reply with one JSON object and nothing else. You never invent details that are not in the source, and you never copy secrets out of it.',
+        ),
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('The model did not answer in time. Try a smaller file, or a faster model in Settings.')),
+          JOB_TIMEOUT_MS,
+        )),
+      ]))
+      .then((parsed) => {
+        const result = sanitizeExtraction(parsed);
+        if (!result.filled.length) throw new Error('Nothing recognisable was found. Check the file is a résumé or profile summary.');
+        return setJob({ ...job, status: 'done', result });
+      })
+      .catch((error) => setJob({ ...job, status: 'error', error: error?.message ?? 'Import failed.' }));
+
+    // Answer at once so the popup is never holding a port open.
+    sendResponse({ started: true, jobId: job.id });
+    return false;
   }
 
   // Live model catalogue, so a provider shipping a new model doesn't require a

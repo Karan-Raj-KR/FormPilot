@@ -15,7 +15,7 @@ DEV_ECHO_CODES = "0"
 [[d1_databases]]
 binding = "DB"
 database_name = "formpilot"
-database_id = ""   # from: npx wrangler d1 create formpilot
+database_id = "6591e8dc-d80b-4d3c-bfa3-f8e9e607a554"
 
 # ─── Secrets (never put these in this file) ───
 # npx wrangler secret put SALT_PEPPER      # any long random string
