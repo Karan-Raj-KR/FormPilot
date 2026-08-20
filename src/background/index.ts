@@ -498,7 +498,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (keys.length === 0) return;
 
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => { autoSync(); }, PUSH_DEBOUNCE_MS) as unknown as number;
+  pushTimer = setTimeout(async () => {
+    // Sync writes storage too. Without this check, applying a merged result
+    // would schedule the next sync, which would apply again, forever. Only a
+    // genuine local edit sets pendingSince.
+    const state = await getSyncState();
+    if (state?.pendingSince) autoSync();
+  }, PUSH_DEBOUNCE_MS) as unknown as number;
 });
 
 // The popup asks for this after a manual action, and to show sync status.

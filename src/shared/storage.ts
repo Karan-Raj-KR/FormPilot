@@ -1,4 +1,4 @@
-import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry } from './types';
+import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry, SyncState } from './types';
 import {
   DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS, PROVIDERS, RETIRED_MODEL_IDS,
 } from './constants.ts';
@@ -23,6 +23,20 @@ export async function getItem<T>(key: string): Promise<T | null> {
 }
 
 export async function setItem<T>(key: string, value: T): Promise<void> {
+  await writeItem(key, value);
+  // One hook, every write path. Doing this per-caller guarantees that the one
+  // caller nobody remembered silently stops syncing.
+  if (SYNCED_KEYS.includes(key)) await markDirty();
+}
+
+/* Writes without flagging the store dirty. Only sync uses this: applying the
+   merged result is not a local edit, and treating it as one makes every sync
+   schedule the next one forever. */
+export async function setItemQuietly<T>(key: string, value: T): Promise<void> {
+  await writeItem(key, value);
+}
+
+async function writeItem<T>(key: string, value: T): Promise<void> {
   if (isChromeStorage) {
     return new Promise((resolve) => {
       chrome.storage.local.set({ [key]: value }, resolve);
@@ -36,6 +50,37 @@ export async function removeItem(key: string): Promise<void> {
     return new Promise((resolve) => chrome.storage.local.remove(key, () => resolve()));
   }
   localStorage.removeItem(key);
+}
+
+/* ─── Sync bookkeeping ───
+   Lives here rather than in sync.ts so that every write path is covered by one
+   hook instead of each caller remembering to flag itself, and so the two files
+   do not import each other in a circle. */
+
+// Collections that ride along to the server. A write to any of them means this
+// device is ahead and owes the server a push.
+const SYNCED_KEYS: string[] = [
+  STORAGE_KEYS.PROFILES, STORAGE_KEYS.SETTINGS, STORAGE_KEYS.HISTORY,
+  STORAGE_KEYS.PAYMENT_CARDS, STORAGE_KEYS.PASSWORDS, STORAGE_KEYS.MEMORY,
+];
+
+/** Flags that local data has moved ahead of the server copy. */
+export async function markDirty(): Promise<void> {
+  const state = await getItem<SyncState>(STORAGE_KEYS.SYNC_STATE);
+  if (state?.pendingSince) return; // already queued
+  await setItem(STORAGE_KEYS.SYNC_STATE, {
+    email: '', userId: '', lastSyncedAt: 0, remoteUpdatedAt: 0,
+    ...(state ?? {}),
+    pendingSince: Date.now(),
+  });
+}
+
+/** Records that a record was deleted, so the delete survives the next merge. */
+export async function recordDeletion(...ids: string[]): Promise<void> {
+  const tombstones = (await getItem<Record<string, number>>(STORAGE_KEYS.TOMBSTONES)) ?? {};
+  const now = Date.now();
+  for (const id of ids) if (id) tombstones[id] = now;
+  await setItem(STORAGE_KEYS.TOMBSTONES, tombstones);
 }
 
 // ─── Profiles ───
@@ -68,6 +113,7 @@ export async function updateProfile(updated: Profile): Promise<Profile[]> {
 export async function deleteProfile(profileId: string): Promise<Profile[]> {
   let profiles = await getProfiles();
   profiles = profiles.filter((p) => p.id !== profileId);
+  await recordDeletion(profileId);
   await saveProfiles(profiles);
   return profiles;
 }
@@ -161,6 +207,7 @@ export async function addPaymentCard(card: PaymentCard): Promise<void> {
 
 export async function deletePaymentCard(id: string): Promise<void> {
   const cards = await getPaymentCards();
+  await recordDeletion(id);
   await savePaymentCards(cards.filter((c) => c.id !== id));
 }
 
@@ -184,6 +231,7 @@ export async function addPassword(entry: PasswordEntry): Promise<void> {
 
 export async function deletePassword(id: string): Promise<void> {
   const entries = await getPasswords();
+  await recordDeletion(id);
   await savePasswords(entries.filter((e) => e.id !== id));
 }
 

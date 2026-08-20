@@ -153,11 +153,33 @@ export interface Settings {
 }
 
 // ─── Sync / account ───
+// How the user got in. 'password' accounts unlock with the same secret they
+// sign in with; 'google' and 'otp' accounts set a separate unlock passphrase,
+// because there is no password to derive a key from.
+export type AuthMethod = 'google' | 'password' | 'otp';
+
+// Everything here is safe at rest: an email, an opaque session token and a
+// public salt. None of it can decrypt anything.
+export interface AuthState {
+  method: AuthMethod;
+  email: string;
+  userId: string;
+  kdfSalt: string;
+  verified: boolean;
+  sessionToken: string;   // empty for Google, which mints its own tokens
+  expiresAt: number;
+  devices?: number;
+  hasPassword?: boolean;
+  hasGoogle?: boolean;
+}
+
 export interface SyncState {
   email: string;
   userId: string;
   lastSyncedAt: number;    // local clock, for display
   remoteUpdatedAt: number; // server clock, sent back as the conflict guard
+  lastError?: string;      // why the last automatic attempt failed, if it did
+  pendingSince?: number;   // local edits waiting to go up
 }
 
 // ─── History ───

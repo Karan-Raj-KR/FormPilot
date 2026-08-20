@@ -235,6 +235,8 @@ export const STORAGE_KEYS = {
   PASSWORDS: 'formpilot_passwords',
   SYNC_STATE: 'formpilot_sync_state',
   MEMORY: 'formpilot_memory',
+  AUTH: 'formpilot_auth',
+  TOMBSTONES: 'formpilot_tombstones',
 } as const;
 
 // How many learned facts to keep. Well under chrome.storage.local's 10MB.

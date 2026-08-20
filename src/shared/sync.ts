@@ -1,164 +1,225 @@
 /* ─────────────────────────────────────────────────
    FormPilot — cross-device sync.
-   Google sign-in via launchWebAuthFlow (works in any browser that
-   supports the identity API, not just Chrome), payload encrypted
-   locally, stored as opaque ciphertext by the Worker.
+
+   What actually travels: one AES-256-GCM ciphertext. The server holds it and
+   an email address, and can read neither the profiles, the cards, the
+   passwords, nor the memory inside it.
+
+   Sync is automatic. Local edits mark the store dirty; a debounced push and a
+   periodic pull (both driven from the background worker) keep two laptops
+   level without anyone pressing a button.
    ───────────────────────────────────────────────── */
 
 import type { SyncState } from './types';
-import { GOOGLE_CLIENT_ID, SYNC_API_URL, SYNC_CONFIGURED } from './config';
 import { encryptJSON, decryptJSON, type EncryptedBlob } from './crypto';
-import { STORAGE_KEYS } from './constants';
+import { STORAGE_KEYS } from './constants.ts';
+import { authedApi, getAuthState, getUnlockKey } from './auth.ts';
+import { mergePayloads, pruneTombstones, fingerprint, type SyncPayload, type Tombstones } from './merge.ts';
 import {
   getProfiles, saveProfiles, getSettings, saveSettings,
   getHistory, saveHistory, getPaymentCards, savePaymentCards,
-  getPasswords, savePasswords, getItem, setItem, removeItem,
-} from './storage';
-import { getMemory, saveMemory } from './memory';
+  getPasswords, savePasswords, getItem, setItem, setItemQuietly, markDirty, recordDeletion,
+} from './storage.ts';
+import { getMemory, saveMemory } from './memory.ts';
 
-export interface SyncPayload {
-  profiles: unknown;
-  settings: unknown;
-  history: unknown;
-  paymentCards: unknown;
-  passwords: unknown;
-  memory?: unknown;
+export type { SyncPayload };
+
+/* ─── Tombstones ───
+   Written by storage.ts on every delete, so the deletion survives a round trip
+   instead of the record reappearing from the other device. */
+export async function getTombstones(): Promise<Tombstones> {
+  return pruneTombstones((await getItem<Tombstones>(STORAGE_KEYS.TOMBSTONES)) ?? {});
 }
 
-// The id token is short-lived (1h) and re-fetched on demand; it is never persisted.
-let cachedToken: { token: string; expiresAt: number } | null = null;
+export { markDirty, recordDeletion };
 
-function assertConfigured() {
-  if (!SYNC_CONFIGURED) {
-    throw new Error('Sync is not configured. Set GOOGLE_CLIENT_ID and SYNC_API_URL in src/shared/config.ts — see docs/sync-setup.md.');
-  }
-}
-
-/** Interactive Google sign-in. Returns a fresh OIDC id token. */
-async function getIdToken(interactive: boolean): Promise<string> {
-  assertConfigured();
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.token;
-
-  const redirectUri = chrome.identity.getRedirectURL();
-  // Implicit id_token flow: no client secret, so nothing secret ships in the
-  // extension bundle. The nonce ties the returned token to this request.
-  const nonce = crypto.randomUUID();
-  const authUrl =
-    'https://accounts.google.com/o/oauth2/v2/auth' +
-    `?client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}` +
-    `&response_type=id_token` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent('openid email')}` +
-    `&nonce=${nonce}` +
-    `&prompt=${interactive ? 'select_account' : 'none'}`;
-
-  const redirect = await chrome.identity.launchWebAuthFlow({ url: authUrl, interactive });
-  if (!redirect) throw new Error('Sign-in was cancelled.');
-
-  // Implicit flow returns the token in the URL fragment.
-  const params = new URLSearchParams(new URL(redirect).hash.slice(1));
-  const token = params.get('id_token');
-  if (!token) throw new Error(params.get('error') || 'Google did not return an id token.');
-
-  const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-  if (claims.nonce !== nonce) throw new Error('Sign-in response did not match this request.');
-  cachedToken = { token, expiresAt: claims.exp * 1000 };
-  return token;
-}
-
-async function api(method: string, body?: unknown): Promise<any> {
-  const token = await getIdToken(false).catch(() => getIdToken(true));
-  const res = await fetch(`${SYNC_API_URL}/sync`, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (res.status === 401) {
-    cachedToken = null;
-    throw new Error('Session expired — sign in again.');
-  }
-  if (res.status === 409) {
-    throw new Error('This device is out of date: another device synced more recently. Pull first, then push.');
-  }
-  if (!res.ok && res.status !== 404) {
-    throw new Error((await res.json().catch(() => ({}))).error || `Sync failed (${res.status}).`);
-  }
-  return res.status === 404 ? null : res.json();
-}
-
-// ─── Account state ───
+/* ─── Sync state ─── */
 export async function getSyncState(): Promise<SyncState | null> {
   return getItem<SyncState>(STORAGE_KEYS.SYNC_STATE);
 }
 
-async function setSyncState(patch: Partial<SyncState>): Promise<SyncState> {
+async function patchSyncState(patch: Partial<SyncState>): Promise<SyncState> {
   const current = (await getSyncState()) ?? { email: '', userId: '', lastSyncedAt: 0, remoteUpdatedAt: 0 };
   const next = { ...current, ...patch };
   await setItem(STORAGE_KEYS.SYNC_STATE, next);
   return next;
 }
 
-export async function signIn(): Promise<SyncState> {
-  const token = await getIdToken(true);
-  const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-  return setSyncState({ email: claims.email || '', userId: claims.sub });
-}
-
-export async function signOut(): Promise<void> {
-  cachedToken = null;
-  await removeItem(STORAGE_KEYS.SYNC_STATE);
-}
-
-// ─── Push / pull ───
+/* ─── Snapshot ─── */
 async function collect(): Promise<SyncPayload> {
-  const [profiles, settings, history, paymentCards, passwords, memory] = await Promise.all([
-    getProfiles(), getSettings(), getHistory(), getPaymentCards(), getPasswords(), getMemory(),
+  const [profiles, settings, history, paymentCards, passwords, memory, tombstones] = await Promise.all([
+    getProfiles(), getSettings(), getHistory(), getPaymentCards(), getPasswords(), getMemory(), getTombstones(),
   ]);
-  return { profiles, settings, history, paymentCards, passwords, memory };
+  return { profiles, settings, history, paymentCards, passwords, memory, tombstones };
 }
 
+/* Writes the merged result locally. Uses the quiet write path throughout:
+   applying what sync just computed is not a local edit, and counting it as one
+   would mark the store dirty and schedule another sync, forever. */
 async function apply(payload: SyncPayload): Promise<void> {
-  await Promise.all([
-    saveProfiles(payload.profiles as any),
-    saveSettings(payload.settings as any),
-    saveHistory(payload.history as any),
-    savePaymentCards(payload.paymentCards as any),
-    savePasswords(payload.passwords as any),
-    // Absent from payloads written by v1.0 — leave local memory alone rather
-    // than wiping it with an undefined.
-    payload.memory ? saveMemory(payload.memory as any) : Promise.resolve(),
-  ]);
+  const writes: Array<[string, unknown]> = [];
+  // Each key is guarded: a payload written by an older version simply has no
+  // entry for that collection, and writing undefined over it would wipe the
+  // data this sync exists to protect.
+  if (payload.profiles) writes.push([STORAGE_KEYS.PROFILES, payload.profiles]);
+  if (payload.settings) writes.push([STORAGE_KEYS.SETTINGS, payload.settings]);
+  if (payload.history) writes.push([STORAGE_KEYS.HISTORY, payload.history]);
+  if (payload.paymentCards) writes.push([STORAGE_KEYS.PAYMENT_CARDS, payload.paymentCards]);
+  if (payload.passwords) writes.push([STORAGE_KEYS.PASSWORDS, payload.passwords]);
+  if (payload.memory) writes.push([STORAGE_KEYS.MEMORY, payload.memory]);
+  if (payload.tombstones) writes.push([STORAGE_KEYS.TOMBSTONES, payload.tombstones]);
+
+  await Promise.all(writes.map(([key, value]) => setItemQuietly(key, value)));
 }
 
-/** Encrypt everything on this device and upload it. */
-export async function push(passphrase: string): Promise<SyncState> {
-  const state = await getSyncState();
-  const blob = await encryptJSON(await collect(), passphrase);
-  const result = await api('PUT', { blob, baseUpdatedAt: state?.remoteUpdatedAt ?? 0 });
-  return setSyncState({ lastSyncedAt: Date.now(), remoteUpdatedAt: result.updatedAt });
+/* ─── Transport ─── */
+
+async function unlockKeyOrThrow(): Promise<{ rawKey: string }> {
+  const rawKey = await getUnlockKey();
+  if (!rawKey) throw new Error('Locked — enter your passphrase to sync.');
+  return { rawKey };
 }
 
-/** Download and decrypt, replacing local data. Returns null if nothing is stored yet. */
-export async function pull(passphrase: string): Promise<SyncState | null> {
-  const result = await api('GET');
-  if (!result) return null;
-  const payload = await decryptJSON<SyncPayload>(result.blob as EncryptedBlob, passphrase);
-  await apply(payload);
-  return setSyncState({ lastSyncedAt: Date.now(), remoteUpdatedAt: result.updatedAt });
-}
-
-/** Pull if the server is ahead of us, otherwise push. */
-export async function sync(passphrase: string): Promise<{ state: SyncState; action: 'pushed' | 'pulled' }> {
-  const state = await getSyncState();
-  const remote = await api('GET');
-  if (remote && remote.updatedAt > (state?.remoteUpdatedAt ?? 0)) {
-    return { state: (await pull(passphrase))!, action: 'pulled' };
+/** Fetches and decrypts the server copy. Null when nothing is stored yet. */
+async function fetchRemote(): Promise<{ payload: SyncPayload; updatedAt: number } | null> {
+  const key = await unlockKeyOrThrow();
+  let result: any;
+  try {
+    result = await authedApi('/sync', { method: 'GET' });
+  } catch (err: any) {
+    if (err?.status === 404) return null;
+    throw err;
   }
-  return { state: await push(passphrase), action: 'pushed' };
+  if (!result?.blob) return null;
+  const payload = await decryptJSON<SyncPayload>(result.blob as EncryptedBlob, key);
+  return { payload, updatedAt: result.updatedAt };
 }
 
-/** Remove the encrypted copy from the server. Local data is untouched. */
+async function putRemote(payload: SyncPayload, baseUpdatedAt: number): Promise<number> {
+  const key = await unlockKeyOrThrow();
+  const blob = await encryptJSON(payload, key);
+  const result = await authedApi('/sync', { method: 'PUT', body: JSON.stringify({ blob, baseUpdatedAt }) });
+  return result.updatedAt;
+}
+
+/* Whether the server already holds a copy. Needed before the unlock screen can
+   decide whether the passphrase being typed is being *set* (and so must be
+   confirmed — a typo would be unrecoverable) or merely *checked*. */
+export async function remoteBackupExists(): Promise<boolean> {
+  try {
+    const result = await authedApi('/sync', { method: 'GET' });
+    return Boolean(result?.blob);
+  } catch (err: any) {
+    if (err?.status === 404) return false;
+    throw err;
+  }
+}
+
+/* ─── The one operation that matters ───
+   Pull, merge, write locally, push the merged result. Safe to call at any time
+   from any device: merging is commutative, so two laptops running this
+   concurrently converge instead of clobbering each other. */
+export async function syncNow(): Promise<{ state: SyncState; changed: boolean }> {
+  const state = await getSyncState();
+  const remote = await fetchRemote();
+  const local = await collect();
+  const email = (await getAuthState())?.email ?? state?.email ?? '';
+
+  if (!remote) {
+    // Nothing on the server yet — this device seeds it.
+    const updatedAt = await putRemote(local, 0);
+    return {
+      state: await patchSyncState({ email, lastSyncedAt: Date.now(), remoteUpdatedAt: updatedAt, pendingSince: undefined, lastError: undefined }),
+      changed: true,
+    };
+  }
+
+  const merged = mergePayloads(local, remote.payload);
+  const mergedPrint = fingerprint(merged);
+
+  // Only touch local storage if the merge actually produced something new.
+  const localChanged = mergedPrint !== fingerprint(local);
+  if (localChanged) await apply(merged);
+
+  // Likewise, only upload if the server's copy is not already this.
+  let updatedAt = remote.updatedAt;
+  const remoteChanged = mergedPrint !== fingerprint(remote.payload);
+  if (remoteChanged) {
+    try {
+      updatedAt = await putRemote(merged, remote.updatedAt);
+    } catch (err: any) {
+      // Another device wrote between our GET and our PUT. Its data is already
+      // safe on the server; merge against the newer copy and retry once.
+      if (err?.status !== 409) throw err;
+      const newer = await fetchRemote();
+      if (!newer) throw err;
+      const remerged = mergePayloads(merged, newer.payload);
+      if (fingerprint(remerged) !== fingerprint(local)) await apply(remerged);
+      updatedAt = await putRemote(remerged, newer.updatedAt);
+    }
+  }
+
+  return {
+    state: await patchSyncState({
+      email,
+      lastSyncedAt: Date.now(),
+      remoteUpdatedAt: updatedAt,
+      pendingSince: undefined,
+      lastError: undefined,
+    }),
+    changed: localChanged || remoteChanged,
+  };
+}
+
+/* ─── Automatic sync ───
+   Called from the background worker on a timer and after local edits settle.
+   Every failure mode here is expected at some point — offline, locked, signed
+   out — so none of them throw; they record a reason and wait for the next tick. */
+let inFlight: Promise<any> | null = null;
+
+export async function autoSync(): Promise<'synced' | 'skipped' | 'failed'> {
+  // One at a time. Two concurrent syncs would each merge against a stale
+  // snapshot and fight over the result.
+  if (inFlight) {
+    await inFlight.catch(() => {});
+    return 'skipped';
+  }
+
+  const auth = await getAuthState();
+  if (!auth?.verified) return 'skipped';
+  if (!(await getUnlockKey())) return 'skipped';
+
+  inFlight = syncNow();
+  try {
+    await inFlight;
+    return 'synced';
+  } catch (err: any) {
+    await patchSyncState({ lastError: err?.message || 'Sync failed.' });
+    return 'failed';
+  } finally {
+    inFlight = null;
+  }
+}
+
+/* ─── Manual escape hatches ───
+   Kept for the cases merging cannot decide: "this device is right, throw the
+   other copy away", and the reverse. */
+
+export async function forcePush(): Promise<SyncState> {
+  const local = await collect();
+  const remote = await fetchRemote();
+  const updatedAt = await putRemote(local, remote?.updatedAt ?? 0);
+  return patchSyncState({ lastSyncedAt: Date.now(), remoteUpdatedAt: updatedAt, pendingSince: undefined, lastError: undefined });
+}
+
+export async function forcePull(): Promise<SyncState | null> {
+  const remote = await fetchRemote();
+  if (!remote) return null;
+  await apply(remote.payload);
+  return patchSyncState({ lastSyncedAt: Date.now(), remoteUpdatedAt: remote.updatedAt, pendingSince: undefined, lastError: undefined });
+}
+
 export async function deleteRemote(): Promise<void> {
-  await api('DELETE');
-  await setSyncState({ remoteUpdatedAt: 0, lastSyncedAt: 0 });
+  await authedApi('/sync', { method: 'DELETE' });
+  await patchSyncState({ remoteUpdatedAt: 0, lastSyncedAt: 0 });
 }

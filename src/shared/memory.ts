@@ -7,7 +7,7 @@
    Sensitive fields never enter memory — those live in the vault.
    ───────────────────────────────────────────────── */
 import type { MemoryFact, DetectedField } from './types';
-import { getItem, setItem } from './storage.ts';
+import { getItem, setItem, recordDeletion } from './storage.ts';
 import { STORAGE_KEYS, MEMORY_LIMIT, SENSITIVE_VALUE, isSensitiveField } from './constants.ts';
 
 // Collapses "First Name *", "first_name", "firstName" onto one key so a fact
@@ -48,11 +48,15 @@ export async function saveMemory(facts: MemoryFact[]): Promise<void> {
 }
 
 export async function clearMemory(): Promise<void> {
+  const facts = await getMemory();
+  await recordDeletion(...facts.map((f) => `${f.domain}::${f.key}`));
   await setItem(STORAGE_KEYS.MEMORY, []);
 }
 
 export async function forgetFact(key: string, domain: string): Promise<MemoryFact[]> {
   const facts = (await getMemory()).filter((f) => !(f.key === key && f.domain === domain));
+  // Must match memoryKeyOf() in merge.ts, or the fact returns on the next sync.
+  await recordDeletion(`${domain}::${key}`);
   await saveMemory(facts);
   return facts;
 }
