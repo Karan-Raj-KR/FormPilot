@@ -1,6 +1,9 @@
 import { getProviderConfig, isSensitiveField, SENSITIVE_VALUE } from '../shared/constants';
 import { LIMITS as PROFILE_LIMITS } from '../shared/profile';
+import { buildResumePrompt, sanitizeExtraction, RESUME_LIMITS } from '../shared/resume';
 import { remember } from '../shared/memory';
+import { autoSync } from '../shared/sync';
+import { getSyncState } from '../shared/sync';
 import { getSettings } from '../shared/storage';
 
 /* ─────────────────────────────────────────────────
@@ -142,7 +145,7 @@ CRITICAL: Respond ONLY with a valid JSON object matching this schema exactly (no
 // OpenAI, Groq, OpenRouter, NVIDIA NIM, DeepSeek, Mistral, Together, xAI,
 // Fireworks, Ollama and any custom endpoint all speak this exact shape, so
 // they share one function. Only the base URL and key differ.
-async function callOpenAICompatible(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+async function rawOpenAICompatible(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
   if (!baseUrl) throw new Error('No API endpoint configured for this provider. Add a base URL in Settings.');
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -172,16 +175,16 @@ async function callOpenAICompatible(prompt: string, apiKey: string, model: strin
     // Not every OpenAI-compatible server implements JSON mode; retry without it
     // rather than failing the whole fill.
     if (/response_format|json_object/i.test(message)) {
-      return callOpenAICompatibleNoJsonMode(prompt, apiKey, model, baseUrl, system);
+      return rawOpenAICompatibleNoJsonMode(prompt, apiKey, model, baseUrl, system);
     }
     throw new Error(message);
   }
 
   const data = await response.json();
-  return parseAIResponse(data.choices?.[0]?.message?.content || '');
+  return data.choices?.[0]?.message?.content || '';
 }
 
-async function callOpenAICompatibleNoJsonMode(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+async function rawOpenAICompatibleNoJsonMode(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -200,11 +203,11 @@ async function callOpenAICompatibleNoJsonMode(prompt: string, apiKey: string, mo
     throw new Error(err.error?.message || err.message || `Request failed (${response.status})`);
   }
   const data = await response.json();
-  return parseAIResponse(data.choices?.[0]?.message?.content || '');
+  return data.choices?.[0]?.message?.content || '';
 }
 
 // ─── Call Anthropic API ───
-async function callAnthropic(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+async function rawAnthropic(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
   const response = await fetch(`${baseUrl}/messages`, {
     method: 'POST',
     headers: {
@@ -229,11 +232,11 @@ async function callAnthropic(prompt: string, apiKey: string, model: string, base
   }
 
   const data = await response.json();
-  return parseAIResponse(data.content?.[0]?.text || '');
+  return data.content?.[0]?.text || '';
 }
 
 // ─── Call Gemini API ───
-async function callGemini(prompt: string, apiKey: string, model: string, baseUrl: string, system: string, attempt: number = 1): Promise<{ suggestions: any[] }> {
+async function rawGemini(prompt: string, apiKey: string, model: string, baseUrl: string, system: string, attempt: number = 1): Promise<string> {
   const safeModel = (model && model.includes('gemini')) ? model : 'gemini-2.5-flash';
 
   try {
@@ -252,21 +255,32 @@ async function callGemini(prompt: string, apiKey: string, model: string, baseUrl
       if ((response.status === 503 || response.status === 429) && attempt < 4) {
         // Exponential backoff for the "model is overloaded" spikes.
         await new Promise((r) => setTimeout(r, 2000 * attempt));
-        return callGemini(prompt, apiKey, model, baseUrl, system, attempt + 1);
+        return rawGemini(prompt, apiKey, model, baseUrl, system, attempt + 1);
       }
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error?.message || `Gemini API error: ${response.status}`);
     }
 
     const data = await response.json();
-    return parseAIResponse(data.candidates?.[0]?.content?.parts?.[0]?.text || '');
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   } catch (error: any) {
     if (attempt < 4 && (error.message.includes('fetch') || error.message.includes('Network'))) {
       await new Promise((r) => setTimeout(r, 2000 * attempt));
-      return callGemini(prompt, apiKey, model, baseUrl, system, attempt + 1);
+      return rawGemini(prompt, apiKey, model, baseUrl, system, attempt + 1);
     }
     throw error;
   }
+}
+
+// ─── Fill path: raw text in, suggestions out ───
+async function callOpenAICompatible(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+  return parseAIResponse(await rawOpenAICompatible(prompt, apiKey, model, baseUrl, system));
+}
+async function callAnthropic(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+  return parseAIResponse(await rawAnthropic(prompt, apiKey, model, baseUrl, system));
+}
+async function callGemini(prompt: string, apiKey: string, model: string, baseUrl: string, system: string) {
+  return parseAIResponse(await rawGemini(prompt, apiKey, model, baseUrl, system));
 }
 
 // ─── Parse AI response (extract JSON) ───
@@ -361,6 +375,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  /* Résumé import. The text was extracted on the user's machine; this only
+     asks the model they already configured to structure it. */
+  if (message.type === 'EXTRACT_PROFILE') {
+    getSettings()
+      .then((settings) => askForJson(
+        settings,
+        buildResumePrompt(String(message.text ?? '').slice(0, RESUME_LIMITS.text)),
+        'You extract structured data from documents. You reply with one JSON object and nothing else. You never invent details that are not in the source, and you never copy secrets out of it.',
+      ))
+      .then((parsed) => sendResponse({ profile: sanitizeExtraction(parsed) }))
+      .catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
+
   // Live model catalogue, so a provider shipping a new model doesn't require a
   // new extension release.
   if (message.type === 'LIST_MODELS') {
@@ -370,6 +398,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+/* Sends one prompt to the configured provider and returns parsed JSON.
+   Separate from the fill path because that one expects a `suggestions` array. */
+async function askForJson(settings: any, prompt: string, system: string): Promise<any> {
+  const { spec, apiKey, model, baseUrl } = getProviderConfig(settings);
+  const key = (apiKey || '').replace(/[^\x20-\x7E]/g, '').trim();
+  if (!key && spec.kind !== 'openai') throw new Error('Add an API key in Settings first.');
+  if (!baseUrl) throw new Error('No API endpoint configured for this provider.');
+
+  const raw = spec.kind === 'gemini' ? await rawGemini(prompt, key, model, baseUrl, system)
+    : spec.kind === 'anthropic' ? await rawAnthropic(prompt, key, model, baseUrl, system)
+    : await rawOpenAICompatible(prompt, key, model, baseUrl, system);
+
+  const candidates = [raw, raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1], raw.match(/\{[\s\S]*\}/)?.[0]];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try { return JSON.parse(candidate.trim()); } catch { /* next */ }
+  }
+  throw new Error('The model did not return usable JSON. Try again, or switch to a stronger model.');
+}
 
 /* ─── Live model list ───
    Every OpenAI-compatible vendor exposes GET /models; Gemini uses /models with
@@ -417,6 +465,52 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
 // Ask the store for an update once a day rather than waiting for Chrome's own
 // (much lazier) schedule.
 chrome.alarms.create('formpilot-update-check', { periodInMinutes: 60 * 24 });
+
+/* ─── Automatic sync ───
+   Two laptops stay level without anyone pressing a button:
+     • every 5 minutes, pull anything the other machine pushed
+     • ~8 seconds after a local edit settles, push this machine's changes
+   Both paths run through autoSync(), which merges rather than overwrites and
+   never throws — offline, locked and signed-out are all normal states here. */
+const SYNC_ALARM = 'formpilot-sync';
+const PUSH_DEBOUNCE_MS = 8_000;
+
+chrome.alarms.create(SYNC_ALARM, { periodInMinutes: 5 });
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'formpilot-update-check') chrome.runtime.requestUpdateCheck?.(() => {});
+  if (alarm.name === SYNC_ALARM) autoSync();
+});
+
+// Catch up the moment the browser (or the service worker) comes back to life.
+chrome.runtime.onStartup.addListener(() => { autoSync(); });
+autoSync();
+
+/* A local edit lands in chrome.storage, which fires here in every extension
+   context at once — popup, options page, content script. Watching storage
+   rather than asking each writer to announce itself means a new feature that
+   saves data syncs automatically, with no wiring. */
+let pushTimer: number | undefined;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  // Ignore our own bookkeeping writes, or the debounce never settles.
+  const keys = Object.keys(changes).filter((k) => k !== 'formpilot_sync_state' && k !== 'formpilot_auth');
+  if (keys.length === 0) return;
+
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => { autoSync(); }, PUSH_DEBOUNCE_MS) as unknown as number;
+});
+
+// The popup asks for this after a manual action, and to show sync status.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return false;
+  if (message.type === 'SYNC_NOW') {
+    autoSync().then((result) => sendResponse({ result })).catch(() => sendResponse({ result: 'failed' }));
+    return true;
+  }
+  if (message.type === 'SYNC_STATE') {
+    getSyncState().then((state) => sendResponse({ state })).catch(() => sendResponse({ state: null }));
+    return true;
+  }
+  return false;
 });

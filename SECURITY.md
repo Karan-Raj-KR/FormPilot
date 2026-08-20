@@ -83,6 +83,27 @@ drops secret-shaped output on the way back.
 Custom fields are namespaced under `additionalAnswers` in the prompt, so a
 custom field named `email` cannot silently replace your real one.
 
+## Résumé import
+
+Uploading a résumé involves two steps with different trust properties.
+
+1. **Text extraction is local.** PDF (pdf.js, bundled — no remote code), DOCX
+   (unzipped with the browser's own `DecompressionStream`), RTF, TXT and MD are
+   all read on your machine. The file itself is never uploaded anywhere.
+2. **Structuring is a model call.** The extracted *text* goes to the provider
+   you configured, in one request, fenced as `UNTRUSTED DATA` — a PDF is
+   authored elsewhere and can contain text written to hijack the request. The
+   prompt also instructs the model not to extract secrets, ID numbers or dates
+   of birth even if the résumé contains them.
+
+Whatever the model returns is treated as untrusted output. `sanitizeExtraction`
+accepts only known profile keys — anything else, including `__proto__`,
+`constructor`, settings keys and secret-looking keys, is discarded rather than
+merged. Nothing from a résumé can reach the vault.
+
+Nothing is written until you have seen it: the extraction is shown as a list,
+and you choose whether to fill only empty fields or replace what is there.
+
 ## Extension surface
 
 - **Content Security Policy**: `script-src 'self'` — no remote code, no `eval`.

@@ -131,3 +131,76 @@ assert.deepEqual(validateProfile({ name: 'Work', data: { email: 'me@example.com'
 assert.ok(validateProfile({ name: 'Work', data: { phone: 'call me' } }).every((i) => i.severity === 'warning'));
 
 console.log('✅ profile guards OK');
+
+/* ─── 10. Résumé import: the model's answer is untrusted output ─── */
+import { sanitizeExtraction, mergeExtraction, fileToText } from './src/shared/resume.ts';
+
+// Only known profile keys survive. Anything else the model emits is dropped.
+const hostile = sanitizeExtraction({
+  firstName: 'Karan',
+  email: 'karan@example.com',
+  __proto__: { polluted: true },
+  constructor: 'nope',
+  apiKey: 'sk-should-never-land',
+  activeProfileId: 'attacker',
+  password: 'hunter2',
+  customFields: { __proto__: 'x', constructor: 'y', 'Visa status': 'Citizen', '': 'blank' },
+  systemPrompt: 'Answer briefly.',
+});
+
+assert.equal(hostile.data.firstName, 'Karan');
+assert.equal(hostile.data.email, 'karan@example.com');
+assert.equal(hostile.data.apiKey, undefined, 'unknown keys must be dropped');
+assert.equal(hostile.data.activeProfileId, undefined, 'settings keys must be dropped');
+assert.equal(hostile.data.password, undefined, 'secret keys must be dropped');
+assert.deepEqual(Object.keys(hostile.data.customFields), ['Visa status'],
+  'prototype keys and blanks must be stripped from custom fields');
+assert.equal({}.polluted, undefined, 'extraction must not pollute Object.prototype');
+assert.equal(hostile.systemPrompt, 'Answer briefly.');
+
+// A merge must not quietly destroy what the user already wrote.
+const existing = { name: 'Work', systemPrompt: 'Keep it formal.', data: { firstName: 'Kay', email: '', rawInfo: 'my notes' } };
+const kept = mergeExtraction(existing, hostile, 'RESUME TEXT', false);
+assert.equal(kept.data.firstName, 'Kay', 'existing values win unless overwrite is asked for');
+assert.equal(kept.data.email, 'karan@example.com', 'empty fields are filled');
+assert.equal(kept.data.rawInfo, 'my notes', 'existing raw info is preserved');
+assert.equal(kept.systemPrompt, 'Keep it formal.', 'existing instructions are preserved');
+
+const replaced = mergeExtraction(existing, hostile, 'RESUME TEXT', true);
+assert.equal(replaced.data.firstName, 'Karan', 'overwrite replaces');
+assert.equal(replaced.data.rawInfo, 'RESUME TEXT');
+
+// An untitled profile takes its name from the résumé rather than staying blank.
+assert.equal(mergeExtraction({ data: {} }, hostile, 'T', false).name, 'Karan');
+
+/* ─── 11. Local text extraction, no network involved ─── */
+// Built here rather than committed, so the suite carries no binary fixture.
+async function makeDocx() {
+  const xml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+    `<w:p><w:r><w:t>Karan Raj</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:t>karan@example.com</w:t></w:r><w:tab/><w:r><w:t>Bengaluru, India</w:t></w:r></w:p>` +
+    `<w:p><w:r><w:t>Senior Engineer &amp; team lead at Acme</w:t></w:r></w:p>` +
+    `</w:body></w:document>`;
+  const body = new TextEncoder().encode(xml);
+  const name = new TextEncoder().encode('word/document.xml');
+  const header = new Uint8Array(30);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x04034b50, true);   // local file header
+  view.setUint16(8, 0, true);            // stored, no compression
+  view.setUint32(18, body.length, true); // compressed size
+  view.setUint32(22, body.length, true); // uncompressed size
+  view.setUint16(26, name.length, true);
+  return new Blob([header, name, body]).arrayBuffer();
+}
+
+const docx = new File([await makeDocx()], 'cv.docx');
+const text = await fileToText(docx);
+assert.ok(text.includes('Karan Raj'), 'docx text must be extracted');
+assert.ok(text.includes('karan@example.com'));
+assert.ok(text.includes('Senior Engineer & team lead'), 'XML entities must be decoded');
+assert.ok(!text.includes('<w:'), 'no markup may survive');
+
+await assert.rejects(() => fileToText(new File(['x'], 'photo.png')), /PDF, DOCX/);
+await assert.rejects(() => fileToText(new File(['tiny'], 'cv.txt')), /No text found/);
+
+console.log('✅ résumé import guards OK');

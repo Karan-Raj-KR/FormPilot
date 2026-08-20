@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo } from 'react';
 import {
   Plus, Edit2, Trash2, CheckCircle2, ChevronDown, ChevronUp, Copy, Check,
   Copy as Duplicate, AlertTriangle, ShieldAlert, Sparkles, X,
+  FileUp, Loader2, FileText,
 } from 'lucide-react';
 import type { Profile, Settings, ProfileData } from '../../shared/types';
 import { addProfile, updateProfile, deleteProfile, saveSettings, generateId } from '../../shared/storage';
@@ -13,6 +14,10 @@ import {
   validateProfile, findSecrets, profileCompleteness, missingFields,
   normalizeProfile, LIMITS,
 } from '../../shared/profile';
+import {
+  fileToText, mergeExtraction, ACCEPTED_TYPES,
+  type ExtractedProfile,
+} from '../../shared/resume';
 
 interface ProfilesProps {
   profiles: Profile[];
@@ -52,7 +57,11 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
   const [formData, setFormData] = useState<Partial<Profile>>({});
   const [showErrors, setShowErrors] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [importState, setImportState] = useState<'idle' | 'reading' | 'thinking'>('idle');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ extracted: ExtractedProfile; text: string; fileName: string } | null>(null);
   const scrollView = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const issues = useMemo(() => validateProfile(formData), [formData]);
   const secrets = useMemo(() => findSecrets(formData), [formData]);
@@ -65,12 +74,46 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
     setTimeout(() => setPromptCopied(false), 2500);
   };
 
+  /* Résumé import. Text is extracted here on the device; only that text is
+     sent to the provider the user already configured. Nothing is written into
+     the profile until they have seen what was found. */
+  const importResume = async (file: File) => {
+    setImportError(null);
+    setImportResult(null);
+    setImportState('reading');
+    try {
+      const text = await fileToText(file);
+      setImportState('thinking');
+      const response = await chrome.runtime.sendMessage({ type: 'EXTRACT_PROFILE', text });
+      if (!response) throw new Error('The extension background did not respond. Reload the extension and retry.');
+      if (response.error) throw new Error(response.error);
+      if (!response.profile?.filled?.length) {
+        throw new Error('Nothing recognisable was found in that file. Check it is a résumé, or paste the text into “About you”.');
+      }
+      setImportResult({ extracted: response.profile, text, fileName: file.name });
+    } catch (err: any) {
+      setImportError(err?.message ?? 'Could not read that file.');
+    } finally {
+      setImportState('idle');
+    }
+  };
+
+  const applyImport = (overwrite: boolean) => {
+    if (!importResult) return;
+    setFormData((prev) => mergeExtraction(prev, importResult.extracted, importResult.text, overwrite));
+    setImportResult(null);
+    setOpenSection('basic');
+    scrollView.current?.scrollTo(0, 0);
+  };
+
   const startEdit = (profile: Profile) => {
     setFormData(structuredClone(profile));
     setEditingId(profile.id);
     setIsCreating(false);
     setShowErrors(false);
     setOpenSection('raw');
+    setImportResult(null);
+    setImportError(null);
     setTimeout(() => scrollView.current?.scrollTo(0, 0), 10);
   };
 
@@ -241,10 +284,17 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
           })}
         </div>
 
-        <button className="btn-secondary w-full py-3 shrink-0" onClick={() => startCreate()}>
-          <Plus size={16} />
-          <span>New profile</span>
-        </button>
+        <div className="grid grid-cols-2 gap-2 shrink-0">
+          <button className="btn-secondary py-3" onClick={() => startCreate()}>
+            <Plus size={15} />
+            <span className="text-xs">New profile</span>
+          </button>
+          {/* The fastest path from install to a working profile. */}
+          <button className="btn-primary py-3" onClick={() => { startCreate(); setTimeout(() => fileInput.current?.click(), 60); }}>
+            <FileUp size={15} />
+            <span className="text-xs">From résumé</span>
+          </button>
+        </div>
       </div>
     );
   }
@@ -262,6 +312,82 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
       </div>
 
       <div className="p-4 space-y-4 overflow-y-auto pb-10">
+        {/* Résumé import */}
+        <input
+          ref={fileInput}
+          type="file"
+          accept={ACCEPTED_TYPES}
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';           // same file twice must still fire
+            if (file) importResume(file);
+          }}
+        />
+
+        {importResult ? (
+          <div className="glass-card-static p-3 space-y-3 border-primary-500/40 bg-primary-500/5">
+            <div className="flex items-start gap-2">
+              <FileText size={14} className="text-primary-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-xs font-semibold">Found {importResult.extracted.filled.length} things in {importResult.fileName}</p>
+                <p className="text-[10px] text-muted mt-0.5">Review before it goes in — nothing is saved yet.</p>
+              </div>
+            </div>
+
+            <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+              {Object.entries(importResult.extracted.data).map(([key, value]) => (
+                key === 'customFields' ? (
+                  Object.entries(value as Record<string, string>).map(([k, v]) => (
+                    <Row key={k} label={k} value={v} tag="custom" />
+                  ))
+                ) : (
+                  <Row key={key} label={humanize(key)} value={String(value)} />
+                )
+              ))}
+              {importResult.extracted.systemPrompt && (
+                <Row label="Custom instructions" value={importResult.extracted.systemPrompt} tag="style" />
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button className="btn-primary !py-1.5 !text-xs flex-1" onClick={() => applyImport(false)}>
+                Fill empty fields
+              </button>
+              <button className="btn-secondary !py-1.5 !text-xs" onClick={() => applyImport(true)}>
+                Replace all
+              </button>
+              <button className="btn-ghost !p-1.5" onClick={() => setImportResult(null)} title="Discard">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="glass-card-static p-3 space-y-2">
+            <button
+              className="btn-secondary w-full !py-2.5 !text-xs"
+              disabled={importState !== 'idle'}
+              onClick={() => fileInput.current?.click()}
+            >
+              {importState === 'idle' ? <FileUp size={14} /> : <Loader2 size={14} className="animate-spin" />}
+              {importState === 'reading' ? 'Reading file…'
+                : importState === 'thinking' ? 'Pulling out your details…'
+                : 'Import from résumé'}
+            </button>
+            <p className="text-[10px] text-muted-dark leading-relaxed text-center">
+              PDF, DOCX, RTF, TXT or MD. Read on this device; the text is then sent to
+              your AI provider to be sorted into fields.
+            </p>
+          </div>
+        )}
+
+        {importError && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+            <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-red-300 leading-relaxed">{importError}</p>
+          </div>
+        )}
+
         {showErrors && errors.length > 0 && (
           <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
             <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
@@ -503,6 +629,16 @@ function sectionOf(field: string): Section {
 
 function humanize(field: string): string {
   return field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim().toLowerCase();
+}
+
+function Row({ label, value, tag }: { label: string; value: string; tag?: string }) {
+  return (
+    <div className="flex items-baseline gap-2 text-[11px] py-0.5">
+      <span className="text-muted shrink-0 max-w-[38%] truncate">{label}</span>
+      {tag && <span className="badge badge-accent !text-[8px] !px-1 shrink-0">{tag}</span>}
+      <span className="text-white/90 truncate flex-1 text-right" title={value}>{value}</span>
+    </div>
+  );
 }
 
 function Accordion({ title, hint, badge, open, onToggle, children }: {

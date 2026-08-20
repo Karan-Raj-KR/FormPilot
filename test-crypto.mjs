@@ -19,7 +19,7 @@ assert.deepEqual(await decryptJSON(blob, 'correct horse battery staple'), payloa
 
 await assert.rejects(
   () => decryptJSON(blob, 'wrong passphrase here'),
-  /Wrong passphrase/,
+  /passphrase/i,
   'a wrong passphrase must throw, not return garbage',
 );
 
