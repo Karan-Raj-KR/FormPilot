@@ -1,8 +1,23 @@
-import React, { useState, useRef } from 'react';
-import { Plus, Edit2, Trash2, CheckCircle2, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
-import type { Profile, Settings } from '../../shared/types';
+import React, { useState, useRef, useMemo } from 'react';
+import {
+  Plus, Edit2, Trash2, CheckCircle2, ChevronDown, ChevronUp, Copy, Check,
+  Copy as Duplicate, AlertTriangle, ShieldAlert, Sparkles, X,
+  FileUp, Loader2, FileText,
+} from 'lucide-react';
+import type { Profile, Settings, ProfileData } from '../../shared/types';
 import { addProfile, updateProfile, deleteProfile, saveSettings, generateId } from '../../shared/storage';
-import { EMPTY_PROFILE_DATA, PROFILE_COLORS, PROFILE_EMOJIS, TONE_OPTIONS, LENGTH_OPTIONS } from '../../shared/constants';
+import {
+  EMPTY_PROFILE_DATA, PROFILE_COLORS, PROFILE_EMOJIS, TONE_OPTIONS, LENGTH_OPTIONS,
+  SYSTEM_PROMPT_PRESETS,
+} from '../../shared/constants';
+import {
+  validateProfile, findSecrets, profileCompleteness, missingFields,
+  normalizeProfile, LIMITS,
+} from '../../shared/profile';
+import {
+  fileToText, mergeExtraction, ACCEPTED_TYPES,
+  type ExtractedProfile,
+} from '../../shared/resume';
 
 interface ProfilesProps {
   profiles: Profile[];
@@ -11,18 +26,47 @@ interface ProfilesProps {
   setSettings: React.Dispatch<React.SetStateAction<Settings>>;
 }
 
+type Section = 'raw' | 'basic' | 'address' | 'work' | 'links' | 'custom' | 'instructions' | '';
+
+const LLM_CONTEXT_PROMPT = `Please compile everything you know about me into a structured personal profile. Include all of the following that you know:
+
+- Full name
+- Email address
+- Phone number
+- Home address (street, city, state, zip, country)
+- Current job title and company
+- Years of experience
+- Key skills (comma-separated)
+- A 2–3 sentence professional bio
+- Work experience highlights (role, company, brief description)
+- Education (degree, institution, year)
+- Notable projects (name + one-line description)
+- LinkedIn URL
+- GitHub URL
+- Personal website
+- Any other relevant personal or professional information
+
+Do not include passwords, card numbers, national ID numbers or any other secret.
+
+Format it as clean plain text — no markdown, no headers — so I can paste it directly into a form-filling assistant.`;
+
 export default function Profiles({ profiles, setProfiles, activeProfileId, setSettings }: ProfilesProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'basic' | 'professional' | 'social' | 'links' | ''>('basic');
-  
-  // Form state
+  const [openSection, setOpenSection] = useState<Section>('raw');
   const [formData, setFormData] = useState<Partial<Profile>>({});
-  
-  const scrollView = useRef<HTMLDivElement>(null);
+  const [showErrors, setShowErrors] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [importState, setImportState] = useState<'idle' | 'reading' | 'thinking'>('idle');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{ extracted: ExtractedProfile; text: string; fileName: string } | null>(null);
+  const scrollView = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  const LLM_CONTEXT_PROMPT = `Please compile everything you know about me into a structured personal profile. Include all of the following that you know:\n\n- Full name\n- Email address\n- Phone number\n- Home address (street, city, state, zip, country)\n- Current job title and company\n- Years of experience\n- Key skills (comma-separated)\n- A 2–3 sentence professional bio\n- Work experience highlights (role, company, brief description)\n- Education (degree, institution, year)\n- Notable projects (name + one-line description)\n- LinkedIn URL\n- GitHub URL\n- Personal website\n- Any other relevant personal or professional information\n\nFormat it as clean plain text — no markdown, no headers — so I can paste it directly into a form-filling assistant.`;
+  const issues = useMemo(() => validateProfile(formData), [formData]);
+  const secrets = useMemo(() => findSecrets(formData), [formData]);
+  const errors = issues.filter((i) => i.severity === 'error');
+  const issueFor = (field: string) => issues.find((i) => i.field === field);
 
   const copyPrompt = async () => {
     await navigator.clipboard.writeText(LLM_CONTEXT_PROMPT);
@@ -30,345 +74,632 @@ export default function Profiles({ profiles, setProfiles, activeProfileId, setSe
     setTimeout(() => setPromptCopied(false), 2500);
   };
 
+  /* Résumé import. Text is extracted here on the device; only that text is
+     sent to the provider the user already configured. Nothing is written into
+     the profile until they have seen what was found. */
+  const importResume = async (file: File) => {
+    setImportError(null);
+    setImportResult(null);
+    setImportState('reading');
+    try {
+      const text = await fileToText(file);
+      setImportState('thinking');
+      const response = await chrome.runtime.sendMessage({ type: 'EXTRACT_PROFILE', text });
+      if (!response) throw new Error('The extension background did not respond. Reload the extension and retry.');
+      if (response.error) throw new Error(response.error);
+      if (!response.profile?.filled?.length) {
+        throw new Error('Nothing recognisable was found in that file. Check it is a résumé, or paste the text into “About you”.');
+      }
+      setImportResult({ extracted: response.profile, text, fileName: file.name });
+    } catch (err: any) {
+      setImportError(err?.message ?? 'Could not read that file.');
+    } finally {
+      setImportState('idle');
+    }
+  };
+
+  const applyImport = (overwrite: boolean) => {
+    if (!importResult) return;
+    setFormData((prev) => mergeExtraction(prev, importResult.extracted, importResult.text, overwrite));
+    setImportResult(null);
+    setOpenSection('basic');
+    scrollView.current?.scrollTo(0, 0);
+  };
+
   const startEdit = (profile: Profile) => {
-    setFormData(JSON.parse(JSON.stringify(profile)));
+    setFormData(structuredClone(profile));
     setEditingId(profile.id);
     setIsCreating(false);
+    setShowErrors(false);
+    setOpenSection('raw');
+    setImportResult(null);
+    setImportError(null);
     setTimeout(() => scrollView.current?.scrollTo(0, 0), 10);
   };
 
-  const startCreate = () => {
-    setFormData({
-      name: 'New Profile',
-      color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length],
-      emoji: PROFILE_EMOJIS[profiles.length % PROFILE_EMOJIS.length],
-      data: { ...EMPTY_PROFILE_DATA },
-      tonePreference: 'professional',
-      lengthPreference: 'moderate'
-    });
+  const startCreate = (from?: Profile) => {
+    setFormData(from
+      ? { ...structuredClone(from), name: `${from.name} copy` }
+      : {
+          name: '',
+          color: PROFILE_COLORS[profiles.length % PROFILE_COLORS.length],
+          emoji: PROFILE_EMOJIS[profiles.length % PROFILE_EMOJIS.length],
+          data: { ...EMPTY_PROFILE_DATA, customFields: {} },
+          systemPrompt: '',
+          tonePreference: 'professional',
+          lengthPreference: 'moderate',
+        });
     setEditingId(null);
     setIsCreating(true);
+    setShowErrors(false);
+    setOpenSection('raw');
     setTimeout(() => scrollView.current?.scrollTo(0, 0), 10);
   };
 
   const saveForm = async () => {
+    setShowErrors(true);
+    if (errors.length > 0) {
+      setOpenSection(sectionOf(errors[0].field));
+      scrollView.current?.scrollTo(0, 0);
+      return;
+    }
+
+    const clean = normalizeProfile(formData);
     if (isCreating) {
-      const newProfile: Profile = {
-        ...(formData as Profile),
+      const created: Profile = {
+        ...(clean as Profile),
         id: generateId(),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
-      const updated = await addProfile(newProfile);
-      setProfiles(updated);
-      
-      // Auto switch if first custom profile
-      if (updated.length === 1 || (updated.length === 3 && activeProfileId === 'personal')) {
-        await setActiveProfile(newProfile.id);
-      }
+      setProfiles(await addProfile(created));
+      // A brand-new profile is what the user wants to use next.
+      await setActiveProfile(created.id);
     } else if (editingId) {
-      const updatedProfile = { ...formData, id: editingId, updatedAt: Date.now() } as Profile;
-      const updated = await updateProfile(updatedProfile);
-      setProfiles(updated);
+      setProfiles(await updateProfile({ ...clean, id: editingId, updatedAt: Date.now() } as Profile));
     }
-    
     setEditingId(null);
     setIsCreating(false);
   };
 
   const removeProfile = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm('Delete this profile?')) {
-      const updated = await deleteProfile(id);
-      setProfiles(updated);
-      if (activeProfileId === id && updated.length > 0) {
-        await setActiveProfile(updated[0].id);
-      }
-    }
+    const profile = profiles.find((p) => p.id === id);
+    if (!confirm(`Delete "${profile?.name}"? Everything saved in it is lost.`)) return;
+    const updated = await deleteProfile(id);
+    setProfiles(updated);
+    if (activeProfileId === id && updated.length > 0) await setActiveProfile(updated[0].id);
   };
 
   const setActiveProfile = async (id: string) => {
-    setSettings(prev => {
-      const newSettings = { ...prev, activeProfileId: id };
-      saveSettings(newSettings);
-      return newSettings;
+    setSettings((prev) => {
+      const next = { ...prev, activeProfileId: id };
+      saveSettings(next);
+      return next;
     });
   };
 
-  const updateDataField = (field: string, value: string) => {
-    setFormData(prev => ({
+  const setField = (field: keyof ProfileData, value: string) => {
+    setFormData((prev) => ({ ...prev, data: { ...(prev.data as ProfileData), [field]: value } }));
+  };
+
+  const setCustomField = (key: string, value: string) => {
+    setFormData((prev) => ({
       ...prev,
-      data: { ...prev.data, [field]: value } as any
+      data: { ...(prev.data as ProfileData), customFields: { ...(prev.data?.customFields ?? {}), [key]: value } },
     }));
   };
 
-  // Render list view
+  const renameCustomField = (oldKey: string, newKey: string) => {
+    setFormData((prev) => {
+      const entries = Object.entries(prev.data?.customFields ?? {});
+      const renamed = entries.map(([k, v]) => (k === oldKey ? [newKey, v] : [k, v]));
+      return { ...prev, data: { ...(prev.data as ProfileData), customFields: Object.fromEntries(renamed) } };
+    });
+  };
+
+  const removeCustomField = (key: string) => {
+    setFormData((prev) => {
+      const rest = { ...(prev.data?.customFields ?? {}) };
+      delete rest[key];
+      return { ...prev, data: { ...(prev.data as ProfileData), customFields: rest } };
+    });
+  };
+
+  /* ─── List view ─── */
   if (!editingId && !isCreating) {
     return (
-      <div className="flex flex-col h-full space-y-4 pt-1">
-        <h2 className="text-xl font-bold text-white tracking-tight mb-2">My Profiles</h2>
-        
-        <div className="space-y-3 flex-1 overflow-y-auto pb-4 pr-1">
+      <div className="flex flex-col h-full gap-3 pt-1">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-xl font-bold tracking-tight">Profiles</h2>
+          <span className="text-[11px] text-muted">{profiles.length} saved</span>
+        </div>
+
+        <div className="space-y-2.5 flex-1 overflow-y-auto pb-2 pr-1">
           {profiles.map((profile, i) => {
             const isActive = profile.id === activeProfileId;
+            const percent = profileCompleteness(profile);
+            const gaps = missingFields(profile);
             return (
-              <div 
-                key={profile.id} 
+              <div
+                key={profile.id}
                 onClick={() => setActiveProfile(profile.id)}
-                className={`glass-card p-3 flex items-center gap-3 cursor-pointer stagger-${i+1} animate-slide-up group ${
-                  isActive ? 'border-primary-500/50 bg-[#18181b]/80' : ''
+                className={`glass-card p-3 cursor-pointer stagger-${Math.min(i + 1, 5)} animate-slide-up group ${
+                  isActive ? 'border-primary-500/50 bg-primary-500/5' : ''
                 }`}
               >
-                <div className="w-10 h-10 rounded-full flex items-center justify-center text-xl shrink-0 transition-transform group-hover:scale-110" style={{ backgroundColor: `${profile.color}20`, color: profile.color }}>
-                  {profile.emoji}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className={`font-semibold truncate ${isActive ? 'text-primary-400' : 'text-white'}`}>
-                      {profile.name}
-                    </h3>
-                    {isActive && <CheckCircle2 size={14} className="text-primary-500" />}
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-10 h-10 rounded-full flex items-center justify-center text-xl shrink-0 transition-transform group-hover:scale-110"
+                    style={{ backgroundColor: `${profile.color}20`, color: profile.color }}
+                  >
+                    {profile.emoji}
                   </div>
-                  <p className="text-xs text-muted truncate mt-0.5">
-                    {profile.data?.bio ? profile.data.bio.substring(0, 40) + '...' : 'No bio set'}
-                  </p>
-                </div>
-                
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button className="btn-ghost !p-1.5" onClick={(e) => { e.stopPropagation(); startEdit(profile); }}>
-                    <Edit2 size={14} />
-                  </button>
-                  {profiles.length > 1 && (
-                    <button className="btn-ghost !p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10" onClick={(e) => removeProfile(profile.id, e)}>
-                      <Trash2 size={14} />
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className={`font-semibold truncate ${isActive ? 'text-primary-400' : ''}`}>{profile.name}</h3>
+                      {isActive && <CheckCircle2 size={13} className="text-primary-500 shrink-0" />}
+                      {profile.systemPrompt?.trim() && (
+                        <span title="Has custom instructions"><Sparkles size={11} className="text-secondary-400 shrink-0" /></span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted truncate mt-0.5">
+                      {profile.data?.role || profile.data?.bio || 'No details yet'}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button className="btn-ghost !p-1.5" title="Edit" onClick={(e) => { e.stopPropagation(); startEdit(profile); }}>
+                      <Edit2 size={13} />
                     </button>
-                  )}
+                    <button className="btn-ghost !p-1.5" title="Duplicate" onClick={(e) => { e.stopPropagation(); startCreate(profile); }}>
+                      <Duplicate size={13} />
+                    </button>
+                    {profiles.length > 1 && (
+                      <button className="btn-ghost !p-1.5 text-red-400 hover:text-red-300 hover:bg-red-500/10" title="Delete" onClick={(e) => removeProfile(profile.id, e)}>
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Completeness — a half-filled profile is the usual reason a fill disappoints */}
+                <div className="mt-2.5 flex items-center gap-2">
+                  <div className="flex-1 h-1 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${percent}%`, backgroundColor: percent > 66 ? '#22c55e' : percent > 33 ? '#f59e0b' : '#ef4444' }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-muted tabular-nums w-8 text-right">{percent}%</span>
+                </div>
+                {gaps.length > 0 && (
+                  <p className="text-[10px] text-muted-dark mt-1 truncate">
+                    Missing: {gaps.slice(0, 4).map(humanize).join(', ')}{gaps.length > 4 ? '…' : ''}
+                  </p>
+                )}
               </div>
             );
           })}
         </div>
 
-        <button className="btn-secondary w-full py-3" onClick={startCreate}>
-          <Plus size={16} />
-          <span>Create Profile</span>
-        </button>
+        <div className="grid grid-cols-2 gap-2 shrink-0">
+          <button className="btn-secondary py-3" onClick={() => startCreate()}>
+            <Plus size={15} />
+            <span className="text-xs">New profile</span>
+          </button>
+          {/* The fastest path from install to a working profile. */}
+          <button className="btn-primary py-3" onClick={() => { startCreate(); setTimeout(() => fileInput.current?.click(), 60); }}>
+            <FileUp size={15} />
+            <span className="text-xs">From résumé</span>
+          </button>
+        </div>
       </div>
     );
   }
 
-  // Render edit form
+  /* ─── Edit view ─── */
+  const data = (formData.data ?? EMPTY_PROFILE_DATA) as ProfileData;
+  const customEntries = Object.entries(data.customFields ?? {});
+
   return (
     <div className="flex flex-col h-full -mx-4 -my-4 h-[calc(100%+2rem)] bg-[#09090b]" ref={scrollView}>
       <div className="flex items-center justify-between p-4 border-b border-[#27272a] sticky top-0 bg-[#09090b]/95 backdrop-blur-md z-20">
-        <button className="btn-ghost" onClick={() => { setEditingId(null); setIsCreating(false); }}>Cancel</button>
-        <span className="font-semibold text-sm">{isCreating ? 'New Profile' : 'Edit Profile'}</span>
-        <button className="btn-primary !px-3 !py-1.5" onClick={saveForm}>Save</button>
+        <button className="btn-ghost !text-xs" onClick={() => { setEditingId(null); setIsCreating(false); }}>Cancel</button>
+        <span className="font-semibold text-sm">{isCreating ? 'New profile' : 'Edit profile'}</span>
+        <button className="btn-primary !px-3 !py-1.5 !text-xs" onClick={saveForm}>Save</button>
       </div>
 
-      <div className="p-4 space-y-6 overflow-y-auto pb-8">
-        {/* Identity config */}
-        <div className="flex items-end gap-3">
-          <div className="w-14 h-14 rounded-full flex items-center justify-center text-2xl shrink-0 border border-[#27272a]" style={{ backgroundColor: `${formData.color}20` }}>
-            {formData.emoji}
+      <div className="p-4 space-y-4 overflow-y-auto pb-10">
+        {/* Résumé import */}
+        <input
+          ref={fileInput}
+          type="file"
+          accept={ACCEPTED_TYPES}
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';           // same file twice must still fire
+            if (file) importResume(file);
+          }}
+        />
+
+        {importResult ? (
+          <div className="glass-card-static p-3 space-y-3 border-primary-500/40 bg-primary-500/5">
+            <div className="flex items-start gap-2">
+              <FileText size={14} className="text-primary-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-xs font-semibold">Found {importResult.extracted.filled.length} things in {importResult.fileName}</p>
+                <p className="text-[10px] text-muted mt-0.5">Review before it goes in — nothing is saved yet.</p>
+              </div>
+            </div>
+
+            <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+              {Object.entries(importResult.extracted.data).map(([key, value]) => (
+                key === 'customFields' ? (
+                  Object.entries(value as Record<string, string>).map(([k, v]) => (
+                    <Row key={k} label={k} value={v} tag="custom" />
+                  ))
+                ) : (
+                  <Row key={key} label={humanize(key)} value={String(value)} />
+                )
+              ))}
+              {importResult.extracted.systemPrompt && (
+                <Row label="Custom instructions" value={importResult.extracted.systemPrompt} tag="style" />
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button className="btn-primary !py-1.5 !text-xs flex-1" onClick={() => applyImport(false)}>
+                Fill empty fields
+              </button>
+              <button className="btn-secondary !py-1.5 !text-xs" onClick={() => applyImport(true)}>
+                Replace all
+              </button>
+              <button className="btn-ghost !p-1.5" onClick={() => setImportResult(null)} title="Discard">
+                <X size={14} />
+              </button>
+            </div>
           </div>
-          <div className="flex-1 space-y-1">
-            <label className="text-[10px] uppercase font-bold text-muted-dark tracking-wider">Profile Name</label>
-            <input 
-              className="glass-input !bg-transparent !border-b !border-0 !border-b-[#27272a] !rounded-none !px-0 focus:!border-b-primary-500" 
-              value={formData.name || ''} 
-              onChange={e => setFormData({...formData, name: e.target.value})}
-            />
+        ) : (
+          <div className="glass-card-static p-3 space-y-2">
+            <button
+              className="btn-secondary w-full !py-2.5 !text-xs"
+              disabled={importState !== 'idle'}
+              onClick={() => fileInput.current?.click()}
+            >
+              {importState === 'idle' ? <FileUp size={14} /> : <Loader2 size={14} className="animate-spin" />}
+              {importState === 'reading' ? 'Reading file…'
+                : importState === 'thinking' ? 'Pulling out your details…'
+                : 'Import from résumé'}
+            </button>
+            <p className="text-[10px] text-muted-dark leading-relaxed text-center">
+              PDF, DOCX, RTF, TXT or MD. Read on this device; the text is then sent to
+              your AI provider to be sorted into fields.
+            </p>
+          </div>
+        )}
+
+        {importError && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+            <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-red-300 leading-relaxed">{importError}</p>
+          </div>
+        )}
+
+        {showErrors && errors.length > 0 && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-start gap-2">
+            <AlertTriangle size={14} className="text-red-400 shrink-0 mt-0.5" />
+            <div className="text-[11px] text-red-300 space-y-0.5">
+              {errors.map((e) => <p key={e.field}>{e.message}</p>)}
+            </div>
+          </div>
+        )}
+
+        {/* Anything that leaves the device should be flagged before it does */}
+        {secrets.length > 0 && (
+          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-2">
+            <ShieldAlert size={14} className="text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-[11px] text-amber-200/90 leading-relaxed">
+              <strong className="text-amber-300">Possible secret in {secrets.map(humanize).join(', ')}.</strong>{' '}
+              Everything in a profile is sent to your AI provider on every fill. Card numbers,
+              passwords and ID numbers belong in the Vault, which is never sent.
+            </div>
+          </div>
+        )}
+
+        {/* Identity */}
+        <div className="glass-card-static p-3 space-y-3">
+          <div className="flex items-end gap-3">
+            <div
+              className="w-14 h-14 rounded-full flex items-center justify-center text-2xl shrink-0 border border-[#27272a]"
+              style={{ backgroundColor: `${formData.color}20` }}
+            >
+              {formData.emoji}
+            </div>
+            <div className="flex-1 space-y-1">
+              <label className="text-[10px] uppercase font-bold text-muted-dark tracking-wider">Profile name</label>
+              <input
+                className={`glass-input !py-1.5 ${showErrors && issueFor('name') ? '!border-red-500/60' : ''}`}
+                placeholder="Work, Personal, Grad school…"
+                value={formData.name ?? ''}
+                maxLength={LIMITS.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {PROFILE_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => setFormData({ ...formData, emoji })}
+                className={`w-7 h-7 rounded-lg text-base flex items-center justify-center transition-all ${
+                  formData.emoji === emoji ? 'bg-white/10 scale-110' : 'hover:bg-white/5 opacity-60'
+                }`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {PROFILE_COLORS.map((color) => (
+              <button
+                key={color}
+                onClick={() => setFormData({ ...formData, color })}
+                className={`w-6 h-6 rounded-full transition-all ${formData.color === color ? 'ring-2 ring-white/70 scale-110' : 'opacity-70 hover:opacity-100'}`}
+                style={{ backgroundColor: color }}
+                aria-label={color}
+              />
+            ))}
           </div>
         </div>
 
-        {/* Tone & Length Preferences */}
-        <div className="space-y-3">
-          <label className="text-[10px] uppercase font-bold text-muted-dark tracking-wider">AI Writing Style</label>
-          <div className="grid grid-cols-2 gap-2">
-            <select 
-              className="glass-input cursor-pointer"
-              value={formData.tonePreference}
-              onChange={e => setFormData({...formData, tonePreference: e.target.value as any})}
-            >
-              {TONE_OPTIONS.map(opt => <option key={opt.id} value={opt.id}>{opt.icon} {opt.label}</option>)}
-            </select>
-            <select 
-              className="glass-input cursor-pointer"
-              value={formData.lengthPreference}
-              onChange={e => setFormData({...formData, lengthPreference: e.target.value as any})}
-            >
-              {LENGTH_OPTIONS.map(opt => <option key={opt.id} value={opt.id}>{opt.icon} {opt.label}</option>)}
-            </select>
-          </div>
+        {/* Writing style */}
+        <div className="grid grid-cols-2 gap-2">
+          <select className="glass-input cursor-pointer !py-2" value={formData.tonePreference} onChange={(e) => setFormData({ ...formData, tonePreference: e.target.value as any })}>
+            {TONE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.icon} {o.label}</option>)}
+          </select>
+          <select className="glass-input cursor-pointer !py-2" value={formData.lengthPreference} onChange={(e) => setFormData({ ...formData, lengthPreference: e.target.value as any })}>
+            {LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.icon} {o.label}</option>)}
+          </select>
         </div>
 
-        {/* Section: Raw Info (Direct AI Parsing) */}
-        <div className="glass-card-static rounded-lg overflow-hidden">
-          <button 
-            className="w-full flex items-center justify-between p-3 bg-[#18181b]/50"
-            onClick={() => setExpandedSection(expandedSection === 'basic' ? '' : 'basic')}
-          >
-            <div className="flex flex-col items-start gap-0.5">
-              <span className="font-semibold text-sm">Raw Content / "About Me"</span>
-              <span className="text-[10px] text-primary-400">Paste anything from ChatGPT/Claude directly here!</span>
+        {/* Raw info */}
+        <Accordion title="About you" hint="Paste a résumé or an LLM summary — the AI reads this first" open={openSection === 'raw'} onToggle={() => setOpenSection(openSection === 'raw' ? '' : 'raw')}>
+          <div className="rounded-lg border border-primary-500/20 bg-primary-500/5 p-2.5 space-y-2">
+            <p className="text-[10px] text-muted-light leading-relaxed">
+              No summary handy? Copy this prompt into ChatGPT, Claude or Gemini and paste the answer below.
+            </p>
+            <button
+              onClick={copyPrompt}
+              className={`flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1.5 rounded-md transition-all ${
+                promptCopied ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-primary-500/15 text-primary-400 border border-primary-500/25 hover:bg-primary-500/25'
+              }`}
+            >
+              {promptCopied ? <Check size={11} /> : <Copy size={11} />}
+              {promptCopied ? 'Copied' : 'Copy prompt for any LLM'}
+            </button>
+          </div>
+          <Counter value={data.rawInfo} max={LIMITS.rawInfo} />
+          <textarea
+            className={`glass-textarea !min-h-[130px] font-mono text-[11px] ${showErrors && issueFor('rawInfo') ? '!border-red-500/60' : ''}`}
+            value={data.rawInfo}
+            onChange={(e) => setField('rawInfo', e.target.value)}
+            placeholder="Everything about you: résumé, bio, achievements, preferences. The AI searches this whenever a form asks something your other fields don't cover."
+          />
+        </Accordion>
+
+        {/* Basics */}
+        <Accordion title="Basics" open={openSection === 'basic'} onToggle={() => setOpenSection(openSection === 'basic' ? '' : 'basic')}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field label="First name" value={data.firstName} onChange={(v) => setField('firstName', v)} />
+            <Field label="Last name" value={data.lastName} onChange={(v) => setField('lastName', v)} />
+            <Field className="col-span-2" label="Email" type="email" value={data.email} onChange={(v) => setField('email', v)} issue={showErrors ? issueFor('email') : undefined} />
+            <Field className="col-span-2" label="Phone" type="tel" value={data.phone} onChange={(v) => setField('phone', v)} issue={showErrors ? issueFor('phone') : undefined} />
+            <div className="col-span-2 space-y-1">
+              <label className="text-xs text-muted-light">Short bio</label>
+              <textarea className="glass-textarea" rows={3} value={data.bio} onChange={(e) => setField('bio', e.target.value)} placeholder="Two sentences on who you are." />
             </div>
-            {expandedSection === 'basic' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-          
-          {expandedSection === 'basic' && (
-            <div className="p-3 space-y-3 border-t border-[#27272a]">
-              {/* Prompt helper */}
-              <div className="rounded-lg border border-primary-500/20 bg-primary-500/5 p-2.5 space-y-2">
-                <p className="text-[10px] text-muted-light leading-relaxed">
-                  Don't have your info ready? Copy this prompt and paste it into{' '}
-                  <span className="text-primary-400 font-medium">ChatGPT, Claude, or Gemini</span>
-                  {' '}— then paste the result below.
-                </p>
-                <button
-                  onClick={copyPrompt}
-                  className={`flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1.5 rounded-md transition-all ${
-                    promptCopied
-                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                      : 'bg-primary-500/15 text-primary-400 border border-primary-500/25 hover:bg-primary-500/25'
-                  }`}
-                >
-                  {promptCopied ? <Check size={11} /> : <Copy size={11} />}
-                  {promptCopied ? 'Prompt copied!' : 'Copy prompt for any LLM'}
-                </button>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-muted-light">Everything about you (Resume, Biography, Custom Instructions, etc)</label>
-                <textarea 
-                  className="glass-textarea !min-h-[120px] font-mono text-[11px]" 
-                  value={formData.data?.rawInfo || ''} 
-                  onChange={e => updateDataField('rawInfo', e.target.value)} 
-                  placeholder="Paste your raw information directly from Claude, ChatGPT, or your Resume here... The AI will instantly search this any time a form asks for something." 
-                />
-              </div>
-            </div>
+          </div>
+        </Accordion>
+
+        {/* Address */}
+        <Accordion title="Address" open={openSection === 'address'} onToggle={() => setOpenSection(openSection === 'address' ? '' : 'address')}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field className="col-span-2" label="Street address" value={data.address} onChange={(v) => setField('address', v)} />
+            <Field label="City" value={data.city} onChange={(v) => setField('city', v)} />
+            <Field label="State / region" value={data.state} onChange={(v) => setField('state', v)} />
+            <Field label="Postal code" value={data.zipCode} onChange={(v) => setField('zipCode', v)} />
+            <Field label="Country" value={data.country} onChange={(v) => setField('country', v)} />
+          </div>
+        </Accordion>
+
+        {/* Work & education */}
+        <Accordion title="Work & education" open={openSection === 'work'} onToggle={() => setOpenSection(openSection === 'work' ? '' : 'work')}>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field label="Company" value={data.company} onChange={(v) => setField('company', v)} />
+            <Field label="Role / title" value={data.role} onChange={(v) => setField('role', v)} />
+          </div>
+          <TextArea label="Skills" value={data.skills} onChange={(v) => setField('skills', v)} placeholder="TypeScript, React, distributed systems…" rows={2} />
+          <TextArea label="Education" value={data.education} onChange={(v) => setField('education', v)} placeholder="B.Tech Computer Science, VIT, 2024" rows={2} />
+          <TextArea label="Experience" value={data.experience} onChange={(v) => setField('experience', v)} placeholder="Roles, companies, what you did." rows={3} />
+          <TextArea label="Projects" value={data.projects} onChange={(v) => setField('projects', v)} placeholder="Name — one line on what it does." rows={3} />
+        </Accordion>
+
+        {/* Links */}
+        <Accordion title="Links" open={openSection === 'links'} onToggle={() => setOpenSection(openSection === 'links' ? '' : 'links')}>
+          <Field label="Website" value={data.website} onChange={(v) => setField('website', v)} issue={showErrors ? issueFor('website') : undefined} placeholder="you.dev" />
+          <Field label="LinkedIn" value={data.linkedin} onChange={(v) => setField('linkedin', v)} issue={showErrors ? issueFor('linkedin') : undefined} placeholder="linkedin.com/in/you" />
+          <Field label="GitHub" value={data.github} onChange={(v) => setField('github', v)} issue={showErrors ? issueFor('github') : undefined} placeholder="github.com/you" />
+          <Field label="X / Twitter" value={data.twitter} onChange={(v) => setField('twitter', v)} issue={showErrors ? issueFor('twitter') : undefined} placeholder="x.com/you" />
+        </Accordion>
+
+        {/* Custom fields */}
+        <Accordion
+          title="Custom fields"
+          hint="Anything the built-in fields don't cover"
+          badge={customEntries.length ? String(customEntries.length) : undefined}
+          open={openSection === 'custom'}
+          onToggle={() => setOpenSection(openSection === 'custom' ? '' : 'custom')}
+        >
+          {customEntries.length === 0 && (
+            <p className="text-[11px] text-muted leading-relaxed">
+              Add facts forms keep asking you for: visa status, dietary needs, t-shirt size,
+              notice period, emergency contact.
+            </p>
           )}
-        </div>
-
-        {/* Data Sections */}
-        <div className="space-y-2">
-          {/* Section: Basic Info */}
-          <div className="glass-card-static rounded-lg overflow-hidden">
-            <button 
-              className="w-full flex items-center justify-between p-3 bg-[#18181b]/50"
-              onClick={() => setExpandedSection(expandedSection === 'professional' ? '' : 'professional')}
+          {customEntries.map(([key, value]) => (
+            <div key={key} className="flex gap-2 items-start">
+              <input
+                className="glass-input !py-1.5 !text-[11px] w-[38%]"
+                value={key}
+                maxLength={LIMITS.customKey}
+                onChange={(e) => renameCustomField(key, e.target.value)}
+                placeholder="Question"
+              />
+              <input
+                className="glass-input !py-1.5 !text-[11px] flex-1"
+                value={value}
+                onChange={(e) => setCustomField(key, e.target.value)}
+                placeholder="Answer"
+              />
+              <button className="btn-ghost !p-1.5 text-red-400 hover:bg-red-500/10 shrink-0" onClick={() => removeCustomField(key)}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+          {customEntries.length < LIMITS.customFields && (
+            <button
+              className="btn-ghost !text-[11px] !py-1.5"
+              onClick={() => setCustomField(`Field ${customEntries.length + 1}`, '')}
             >
-              <span className="font-semibold text-sm">Specific Form Overrides (Optional)</span>
-              {expandedSection === 'professional' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              <Plus size={12} /> Add field
             </button>
-            
-            {expandedSection === 'professional' && (
-              <div className="p-3 space-y-3 border-t border-[#27272a] grid grid-cols-2 gap-3">
-                <div className="space-y-1 col-span-1">
-                  <label className="text-xs text-muted-light">First Name</label>
-                  <input className="glass-input !py-1.5" value={formData.data?.firstName || ''} onChange={e => updateDataField('firstName', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-1">
-                  <label className="text-xs text-muted-light">Last Name</label>
-                  <input className="glass-input !py-1.5" value={formData.data?.lastName || ''} onChange={e => updateDataField('lastName', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-xs text-muted-light">Email</label>
-                  <input className="glass-input !py-1.5" type="email" value={formData.data?.email || ''} onChange={e => updateDataField('email', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-xs text-muted-light">Phone</label>
-                  <input className="glass-input !py-1.5" type="tel" value={formData.data?.phone || ''} onChange={e => updateDataField('phone', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-xs text-muted-light">Address</label>
-                  <input className="glass-input !py-1.5" value={formData.data?.address || ''} onChange={e => updateDataField('address', e.target.value)} placeholder="Street name & apt" />
-                </div>
-                <div className="space-y-1 col-span-1">
-                  <label className="text-xs text-muted-light">City</label>
-                  <input className="glass-input !py-1.5" value={formData.data?.city || ''} onChange={e => updateDataField('city', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-1">
-                  <label className="text-xs text-muted-light">Country</label>
-                  <input className="glass-input !py-1.5" value={formData.data?.country || ''} onChange={e => updateDataField('country', e.target.value)} />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-xs text-muted-light">Bio (Important for AI context)</label>
-                  <textarea className="glass-textarea" value={formData.data?.bio || ''} onChange={e => updateDataField('bio', e.target.value)} rows={3} placeholder="A short description of yourself..." />
-                </div>
-              </div>
-            )}
-          </div>
+          )}
+        </Accordion>
 
-          {/* Section: Professional */}
-          <div className="glass-card-static rounded-lg overflow-hidden">
-            <button 
-              className="w-full flex items-center justify-between p-3 bg-[#18181b]/50"
-              onClick={() => setExpandedSection(expandedSection === 'social' ? '' : 'social')}
-            >
-              <span className="font-semibold text-sm">Professional History</span>
-              {expandedSection === 'social' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            
-            {expandedSection === 'social' && (
-              <div className="p-3 space-y-3 border-t border-[#27272a]">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-light">Company</label>
-                    <input className="glass-input !py-1.5" value={formData.data?.company || ''} onChange={e => updateDataField('company', e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-muted-light">Role/Title</label>
-                    <input className="glass-input !py-1.5" value={formData.data?.role || ''} onChange={e => updateDataField('role', e.target.value)} />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">Skills (comma separated)</label>
-                  <textarea className="glass-textarea !min-h-[40px]" value={formData.data?.skills || ''} onChange={e => updateDataField('skills', e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">Experience Summary</label>
-                  <textarea className="glass-textarea" value={formData.data?.experience || ''} onChange={e => updateDataField('experience', e.target.value)} rows={3} placeholder="Paste your resume summary here..." />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">Projects Highlights</label>
-                  <textarea className="glass-textarea" value={formData.data?.projects || ''} onChange={e => updateDataField('projects', e.target.value)} rows={3} placeholder="Built FormPilot..." />
-                </div>
-              </div>
-            )}
+        {/* System prompt */}
+        <Accordion
+          title="Custom instructions"
+          hint="Standing rules for how the AI answers with this profile"
+          badge={formData.systemPrompt?.trim() ? 'on' : undefined}
+          open={openSection === 'instructions'}
+          onToggle={() => setOpenSection(openSection === 'instructions' ? '' : 'instructions')}
+        >
+          <div className="flex flex-wrap gap-1.5">
+            {SYSTEM_PROMPT_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                className="text-[10px] px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-muted-light border border-white/10"
+                onClick={() => setFormData({ ...formData, systemPrompt: preset.text })}
+              >
+                {preset.label}
+              </button>
+            ))}
           </div>
-
-          {/* Section: Links & Social */}
-          <div className="glass-card-static rounded-lg overflow-hidden">
-            <button 
-              className="w-full flex items-center justify-between p-3 bg-[#18181b]/50"
-              onClick={() => setExpandedSection(expandedSection === 'links' ? '' : 'links')}
-            >
-              <span className="font-semibold text-sm">Links & Social</span>
-              {expandedSection === 'links' ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            
-            {expandedSection === 'links' && (
-              <div className="p-3 space-y-3 border-t border-[#27272a]">
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">Website</label>
-                  <input className="glass-input !py-1.5" type="url" value={formData.data?.website || ''} onChange={e => updateDataField('website', e.target.value)} placeholder="https://" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">LinkedIn URL</label>
-                  <input className="glass-input !py-1.5" type="url" value={formData.data?.linkedin || ''} onChange={e => updateDataField('linkedin', e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-muted-light">GitHub URL</label>
-                  <input className="glass-input !py-1.5" type="url" value={formData.data?.github || ''} onChange={e => updateDataField('github', e.target.value)} />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
+          <Counter value={formData.systemPrompt ?? ''} max={LIMITS.systemPrompt} />
+          <textarea
+            className={`glass-textarea !min-h-[110px] text-[12px] ${showErrors && issueFor('systemPrompt') ? '!border-red-500/60' : ''}`}
+            value={formData.systemPrompt ?? ''}
+            onChange={(e) => setFormData({ ...formData, systemPrompt: e.target.value })}
+            placeholder={'Write in first person and keep answers under 100 words.\nNever mention that I am currently job-hunting.\nFor "how did you hear about us", always answer "LinkedIn".'}
+          />
+          <p className="text-[10px] text-muted-dark leading-relaxed">
+            Sent with every fill that uses this profile. It guides tone and wording — it can't
+            override the rules that keep passwords, card numbers and one-time codes out of the AI.
+          </p>
+        </Accordion>
       </div>
     </div>
+  );
+}
+
+/* ─── Small pieces ─── */
+
+function sectionOf(field: string): Section {
+  if (['email', 'phone'].includes(field)) return 'basic';
+  if (['website', 'linkedin', 'github', 'twitter'].includes(field)) return 'links';
+  if (field === 'rawInfo') return 'raw';
+  if (field === 'systemPrompt') return 'instructions';
+  if (field === 'customFields') return 'custom';
+  return '';
+}
+
+function humanize(field: string): string {
+  return field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim().toLowerCase();
+}
+
+function Row({ label, value, tag }: { label: string; value: string; tag?: string }) {
+  return (
+    <div className="flex items-baseline gap-2 text-[11px] py-0.5">
+      <span className="text-muted shrink-0 max-w-[38%] truncate">{label}</span>
+      {tag && <span className="badge badge-accent !text-[8px] !px-1 shrink-0">{tag}</span>}
+      <span className="text-white/90 truncate flex-1 text-right" title={value}>{value}</span>
+    </div>
+  );
+}
+
+function Accordion({ title, hint, badge, open, onToggle, children }: {
+  title: string; hint?: string; badge?: string; open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="glass-card-static rounded-lg overflow-hidden">
+      <button className="w-full flex items-center justify-between p-3 bg-[#18181b]/50 text-left" onClick={onToggle}>
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <span className="font-semibold text-sm flex items-center gap-1.5">
+            {title}
+            {badge && <span className="badge badge-accent !text-[9px] !px-1.5">{badge}</span>}
+          </span>
+          {hint && <span className="text-[10px] text-muted truncate">{hint}</span>}
+        </div>
+        {open ? <ChevronUp size={15} className="shrink-0" /> : <ChevronDown size={15} className="shrink-0" />}
+      </button>
+      {open && <div className="p-3 space-y-3 border-t border-[#27272a]">{children}</div>}
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = 'text', placeholder, issue, className = '' }: {
+  label: string; value: string; onChange: (v: string) => void;
+  type?: string; placeholder?: string; issue?: { message: string; severity: string }; className?: string;
+}) {
+  return (
+    <div className={`space-y-1 ${className}`}>
+      <label className="text-xs text-muted-light">{label}</label>
+      <input
+        className={`glass-input !py-1.5 ${issue ? (issue.severity === 'error' ? '!border-red-500/60' : '!border-amber-500/50') : ''}`}
+        type={type}
+        value={value ?? ''}
+        placeholder={placeholder}
+        maxLength={LIMITS.field}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {issue && (
+        <p className={`text-[10px] ${issue.severity === 'error' ? 'text-red-400' : 'text-amber-400'}`}>{issue.message}</p>
+      )}
+    </div>
+  );
+}
+
+function TextArea({ label, value, onChange, placeholder, rows = 3 }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; rows?: number;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs text-muted-light">{label}</label>
+      <textarea className="glass-textarea" rows={rows} value={value ?? ''} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function Counter({ value, max }: { value: string; max: number }) {
+  const used = value?.length ?? 0;
+  if (used < max * 0.6) return null;
+  return (
+    <p className={`text-[10px] text-right tabular-nums ${used > max ? 'text-red-400' : 'text-muted'}`}>
+      {used.toLocaleString()} / {max.toLocaleString()}
+    </p>
   );
 }

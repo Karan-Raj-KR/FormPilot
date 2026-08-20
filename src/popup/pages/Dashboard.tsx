@@ -1,120 +1,105 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { Sparkles, UserCircle, Settings2, FileText, ArrowRight, ScanLine } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { UserCircle, Settings2, ArrowRight, ScanLine, Brain, Check } from 'lucide-react';
 import type { Page, Settings, Profile } from '../../shared/types';
-import { saveSettings } from '../../shared/storage';
+import { getMemory } from '../../shared/memory';
 
 interface DashboardProps {
   settings: Settings;
   setSettings: React.Dispatch<React.SetStateAction<Settings>>;
   navigateTo: (page: Page) => void;
   profiles: Profile[];
+  fieldCount: number;
 }
 
-const staggerContainer = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.1 } }
-};
-
-const staggerItem = {
-  hidden: { opacity: 0, y: 15 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 260, damping: 20 } }
-};
-
-export default function DashboardPage({ settings, setSettings, navigateTo, profiles }: DashboardProps) {
+export default function DashboardPage({ settings, navigateTo, profiles, fieldCount }: DashboardProps) {
   const activeProfile = profiles.find((p) => p.id === settings.activeProfileId) || profiles[0];
+  const [factCount, setFactCount] = useState<number | null>(null);
 
-  const updateSetting = (key: keyof Settings, value: any) => {
-    const nextSettings = { ...settings, [key]: value };
-    setSettings(nextSettings);
-    saveSettings(nextSettings);
-  };
+  useEffect(() => { getMemory().then((f) => setFactCount(f.length)); }, []);
 
-  const hasApiKey = Boolean(settings.openaiApiKey || settings.anthropicApiKey || settings.geminiApiKey);
-  const hasProfileSetup = activeProfile && activeProfile.data.firstName.length > 0;
+  // Any configured provider counts — the list is open-ended now.
+  const hasApiKey = Object.values(settings.providers ?? {}).some((p) => p?.apiKey);
+  const hasProfileSetup = Boolean(activeProfile?.data?.firstName || activeProfile?.data?.rawInfo);
+  const ready = hasApiKey && hasProfileSetup;
+
+  const steps = [
+    {
+      done: hasApiKey,
+      icon: <Settings2 size={16} />,
+      title: 'Connect an AI provider',
+      hint: hasApiKey ? 'Key saved' : 'Any of 13 providers, or your own endpoint',
+      page: 'settings' as Page,
+    },
+    {
+      done: hasProfileSetup,
+      icon: <UserCircle size={16} />,
+      title: 'Tell it about you',
+      hint: hasProfileSetup ? `${activeProfile?.name} is set up` : 'Paste a résumé or a note — that is enough',
+      page: 'profiles' as Page,
+    },
+    {
+      done: ready && fieldCount > 0,
+      icon: <ScanLine size={16} />,
+      title: 'Scan & fill',
+      hint: fieldCount > 0 ? `${fieldCount} fields waiting on this page` : 'Open any form and hit Scan',
+      page: 'home' as Page,
+    },
+  ];
 
   return (
-    <div className="flex flex-col h-full space-y-5 pt-1 pb-6 overflow-y-auto pr-1 animate-fade-in">
-
-      {/* Hero Welcome */}
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5, ease: "easeOut", type: 'spring', stiffness: 200, damping: 20 }}
-        className="flex flex-col items-center justify-center text-center space-y-2 mt-4 mb-2"
-      >
-        <motion.img
-          initial={{ rotate: -15, scale: 0.8 }}
-          animate={{ rotate: -5, scale: 1 }}
-          transition={{ type: 'spring', stiffness: 250, damping: 15 }}
-          src="/icons/icon128.png"
-          className="w-16 h-16 rounded-2xl shadow-[0_0_30px_rgba(14,165,233,0.5)] mb-2 hover:rotate-[0deg] hover:scale-110 transition-all duration-300"
-          alt="FormPilot Logo"
-        />
-        <h2 className="text-2xl font-bold text-white tracking-tight">FormPilot</h2>
-        <p className="text-xs text-muted-light max-w-[260px]">Your intelligent auto-filling assistant. Welcome to the future of browsing.</p>
-      </motion.div>
-
-      {/* Getting Started Guide */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold tracking-wide">Quick Start Guide</h3>
-
-        <motion.div variants={staggerContainer} initial="hidden" animate="show" className="grid grid-cols-1 gap-2">
-
-          {/* Step 1: API Keys */}
-          <motion.div variants={staggerItem}
-            onClick={() => navigateTo('settings')}
-            className={`glass-card-static p-3 flex items-center justify-between cursor-pointer group hover:border-secondary-500/40 transition-colors ${hasApiKey ? 'opacity-60' : 'border-primary-500/50 shadow-[0_0_15px_rgba(14,165,233,0.15)] bg-primary-500/5'}`}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${hasApiKey ? 'bg-secondary-500/10 text-secondary-500' : 'bg-primary-500/10 text-primary-400'}`}>
-                <Settings2 size={16} />
-              </div>
-              <div className="text-left">
-                <p className="text-[12px] font-semibold text-white">1. Configure AI Provider</p>
-                <p className="text-[10px] text-muted">{hasApiKey ? 'API Key configured' : 'Add your OpenAI/Claude key'}</p>
-              </div>
-            </div>
-            {hasApiKey ? <span className="text-[10px] font-bold text-secondary-500">✓</span> : <ArrowRight size={14} className="text-primary-400 group-hover:translate-x-1 group-hover:text-secondary-400 transition-all" />}
-          </motion.div>
-
-          {/* Step 2: Profiles */}
-          <motion.div variants={staggerItem}
-            onClick={() => navigateTo('profiles')}
-            className={`glass-card-static p-3 flex items-center justify-between cursor-pointer group hover:border-secondary-500/40 transition-colors ${(hasProfileSetup && hasApiKey) ? 'opacity-60' : (!hasApiKey ? 'opacity-40' : 'border-primary-500/50 shadow-[0_0_15px_rgba(14,165,233,0.15)] bg-primary-500/5')}`}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${hasProfileSetup ? 'bg-secondary-500/10 text-secondary-500' : 'bg-primary-500/10 text-primary-400'}`}>
-                <UserCircle size={16} />
-              </div>
-              <div className="text-left">
-                <p className="text-[12px] font-semibold text-white">2. Create a Profile</p>
-                <p className="text-[10px] text-muted">{hasProfileSetup ? 'Profile ready' : 'Fill in the information to inject'}</p>
-              </div>
-            </div>
-            {hasProfileSetup ? <span className="text-[10px] font-bold text-secondary-500">✓</span> : <ArrowRight size={14} className="text-primary-400 group-hover:translate-x-1 group-hover:text-secondary-400 transition-all" />}
-          </motion.div>
-
-          {/* Step 3: Scan */}
-          <motion.div variants={staggerItem}
-            onClick={() => navigateTo('home')}
-            className={`glass-card p-3 flex items-center justify-between cursor-pointer group transition-all ${(hasProfileSetup && hasApiKey) ? 'border-secondary-500/50 shadow-[0_4px_20px_rgba(245,158,11,0.2)] bg-secondary-500/10 hover:border-secondary-500/80 hover:bg-secondary-500/20' : 'opacity-40'}`}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${(hasProfileSetup && hasApiKey) ? 'bg-secondary-500/20 text-secondary-400' : 'bg-primary-500/20 text-primary-400'}`}>
-                <ScanLine size={16} />
-              </div>
-              <div className="text-left">
-                <p className={`text-[12px] font-semibold ${(hasProfileSetup && hasApiKey) ? 'text-secondary-50' : 'text-white'}`}>3. Scan & Auto-Fill</p>
-                <p className={`text-[10px] ${(hasProfileSetup && hasApiKey) ? 'text-secondary-200/80' : 'text-muted'}`}>Navigate to any form and scan it</p>
-              </div>
-            </div>
-            <ArrowRight size={14} className={`${(hasProfileSetup && hasApiKey) ? 'text-secondary-400' : 'text-primary-400'} group-hover:translate-x-1.5 group-hover:scale-110 transition-all`} />
-          </motion.div>
-
-        </motion.div>
+    <div className="flex flex-col h-full gap-5 overflow-y-auto pr-1 animate-fade-in">
+      <div className="flex flex-col items-center text-center gap-2 mt-3">
+        <img src="/icons/icon128.png" className="w-14 h-14 rounded-2xl shadow-[0_0_28px_rgba(14,165,233,0.4)]" alt="" />
+        <h2 className="text-xl font-bold tracking-tight">FormPilot</h2>
+        <p className="text-xs text-muted-light max-w-[280px] leading-relaxed">
+          Reads every field on the page, fills it from what it knows about you, and remembers your answers for next time.
+        </p>
       </div>
 
+      <section className="space-y-2.5">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-light px-0.5">
+          {ready ? 'You’re set up' : 'Get started'}
+        </h3>
+
+        {steps.map((step, i) => (
+          <button
+            key={step.title}
+            onClick={() => navigateTo(step.page)}
+            className={`w-full glass-card-static p-3 flex items-center justify-between gap-3 text-left transition-colors hover:border-primary-500/40 ${
+              step.done ? 'opacity-70' : 'border-primary-500/40 bg-primary-500/[0.06]'
+            }`}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                step.done ? 'bg-green-500/10 text-green-400' : 'bg-primary-500/10 text-primary-400'
+              }`}>
+                {step.done ? <Check size={16} /> : step.icon}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold leading-tight">{i + 1}. {step.title}</p>
+                <p className="text-[11px] text-muted mt-0.5 truncate">{step.hint}</p>
+              </div>
+            </div>
+            <ArrowRight size={14} className="text-muted-dark shrink-0" />
+          </button>
+        ))}
+      </section>
+
+      <button
+        onClick={() => navigateTo('memory')}
+        className="glass-card p-3 flex items-center gap-3 text-left hover:border-violet-500/40 transition-colors"
+      >
+        <div className="w-9 h-9 rounded-xl bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0">
+          <Brain size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-semibold leading-tight">What it knows about you</p>
+          <p className="text-[11px] text-muted mt-0.5">
+            {factCount === null ? 'Loading…' : factCount === 0 ? 'Learning starts with your first fill' : `${factCount} facts learned so far`}
+          </p>
+        </div>
+        <ArrowRight size={14} className="text-muted-dark shrink-0" />
+      </button>
     </div>
   );
 }

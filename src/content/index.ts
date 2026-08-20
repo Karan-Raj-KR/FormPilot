@@ -1,7 +1,29 @@
 /* ─────────────────────────────────────────────────
    FormPilot — Content Script
-   Scans DOM for form fields, injects filled values.
+   Runs in every frame. Scans the DOM (including shadow roots) for anything
+   fillable, injects values, and quietly reports what the user types so the
+   extension keeps learning.
    ───────────────────────────────────────────────── */
+
+import { inferCategory, isSensitiveField, SENSITIVE_VALUE } from '../shared/constants';
+import type { PageContext } from '../shared/types';
+
+// ─── Deep query (pierces open shadow roots) ───
+// Design systems built on web components (Salesforce, Shopify, Ionic, many
+// bank portals) put their inputs inside shadow DOM, where querySelectorAll on
+// the document finds nothing at all.
+function queryDeep(selector: string, root: Document | ShadowRoot = document): Element[] {
+  const found: Element[] = Array.from(root.querySelectorAll(selector));
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    const shadow = (el as HTMLElement).shadowRoot;
+    if (shadow) found.push(...queryDeep(selector, shadow));
+  }
+  return found;
+}
+
+function findDeep(selector: string, root: Document | ShadowRoot = document): Element | null {
+  return queryDeep(selector, root)[0] ?? null;
+}
 
 // ─── Unique selector generator ───
 function generateSelector(el: Element): string {
@@ -42,10 +64,13 @@ function generateSelector(el: Element): string {
 
 // ─── Label extraction ───
 function findLabel(el: Element): string {
-  // 1. Explicit <label for="id">
+  const root = el.getRootNode() as Document | ShadowRoot;
+
+  // 1. Explicit <label for="id"> — resolved within the element's own root so
+  //    shadow-DOM labels are found too.
   const id = el.id;
   if (id) {
-    const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+    const label = root.querySelector(`label[for="${CSS.escape(id)}"]`);
     if (label?.textContent) return label.textContent.trim();
   }
 
@@ -61,8 +86,8 @@ function findLabel(el: Element): string {
   // 3. aria-labelledby (W3C standard priority over aria-label)
   const ariaLabelledBy = el.getAttribute('aria-labelledby');
   if (ariaLabelledBy) {
-    const texts = ariaLabelledBy.split(/\s+/).map(id => {
-      const ref = document.getElementById(id);
+    const texts = ariaLabelledBy.split(/\s+/).map(refId => {
+      const ref = (root as Document).getElementById?.(refId) ?? root.querySelector(`#${CSS.escape(refId)}`);
       return ref?.textContent?.trim() || '';
     }).filter(Boolean);
     if (texts.length > 0) return texts.join(' ');
@@ -127,7 +152,7 @@ function findGroupLabel(el: Element): string {
     if (roleAttr === 'radiogroup' || roleAttr === 'group' || roleAttr === 'list') {
       const ariaLabel = parent.getAttribute('aria-label');
       if (ariaLabel) return ariaLabel.trim();
-      
+
       // Look for a heading inside or right before this group
       const heading = parent.querySelector('[role="heading"], h1, h2, h3, h4, h5, h6');
       if (heading?.textContent) return heading.textContent.trim();
@@ -146,40 +171,77 @@ function findGroupLabel(el: Element): string {
   return '';
 }
 
-// ─── Category inference ───
-function inferCategory(label: string, type: string, name: string): string {
-  const combined = `${label} ${name} ${type}`.toLowerCase();
+// ─── Section heading a field sits under ───
+// "Billing address" vs "Shipping address" is the difference between a right
+// and a wrong answer, and it is never in the field's own label.
+function findSection(el: Element): string {
+  let node: Element | null = el;
+  let hops = 0;
+  while (node && node !== document.body && hops < 8) {
+    const fieldset = node.tagName === 'FIELDSET' ? node : null;
+    const legend = fieldset?.querySelector('legend')?.textContent?.trim();
+    if (legend) return legend.slice(0, 80);
 
-  if (/email/i.test(combined)) return 'contact';
-  if (/phone|tel|mobile/i.test(combined)) return 'contact';
-  if (/first\s?name|last\s?name|full\s?name|^name$/i.test(combined)) return 'personal';
-  if (/address|street|apt|suite/i.test(combined)) return 'address';
-  if (/city|state|province|zip|postal|country/i.test(combined)) return 'address';
-  if (/linkedin|github|twitter|website|portfolio|url/i.test(combined)) return 'social';
-  if (/company|organization|employer|role|title|position|job/i.test(combined)) return 'professional';
-  if (/school|university|college|degree|gpa|education|major/i.test(combined)) return 'education';
-  if (/project|describe|tell\s?us|why|essay|motivation|about|bio|summary|cover/i.test(combined)) return 'essay';
-  if (/skill|technology|stack|experience/i.test(combined)) return 'professional';
+    let sibling = node.previousElementSibling;
+    while (sibling) {
+      if (/^H[1-6]$/.test(sibling.tagName) || sibling.getAttribute('role') === 'heading') {
+        const text = sibling.textContent?.trim();
+        if (text && text.length < 80) return text;
+      }
+      sibling = sibling.previousElementSibling;
+    }
+    node = node.parentElement;
+    hops++;
+  }
+  return '';
+}
 
-  if (type === 'textarea') return 'essay';
-  return 'other';
+// ─── Visibility ───
+function isVisible(el: Element): boolean {
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return false;
+  const style = window.getComputedStyle(el as HTMLElement);
+  return style.display !== 'none' && style.visibility !== 'hidden';
+}
+
+// Every element shape we know how to read or write.
+const FIELD_SELECTOR = [
+  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="file"])',
+  'textarea',
+  'select',
+  '[contenteditable=""]',
+  '[contenteditable="true"]',
+  '[role="radio"]',
+  '[role="checkbox"]',
+  '[role="switch"]',
+  '[role="listbox"]',
+  '[role="combobox"]',
+  '[role="textbox"]',
+  '[role="spinbutton"]',
+].join(', ');
+
+// ─── Page context ───
+function getPageContext(): PageContext {
+  const text = (el: Element | null) => el?.textContent?.trim().replace(/\s+/g, ' ') ?? '';
+  return {
+    url: location.href,
+    domain: location.hostname,
+    title: document.title,
+    description: document.querySelector('meta[name="description"]')?.getAttribute('content')?.slice(0, 300) ?? '',
+    headings: Array.from(document.querySelectorAll('h1, h2, [role="heading"], legend'))
+      .map(text)
+      .filter((t) => t && t.length < 120)
+      .slice(0, 10),
+    submitLabels: Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"], button'))
+      .map((el) => text(el) || (el as HTMLInputElement).value || '')
+      .filter((t) => t && t.length < 40)
+      .slice(0, 6),
+  };
 }
 
 // ─── Scan all form fields ───
 function scanFields() {
-  const selector = [
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"])',
-    ':not([type="reset"]):not([type="image"]):not([type="file"]):not([type="checkbox"])',
-    ':not([type="radio"]),',
-    'textarea,',
-    'select',
-  ].join('');
-
-  // Cleaner selector
-  const elements = document.querySelectorAll(
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="file"]), textarea, select, [role="radio"], [role="checkbox"], [role="listbox"], [role="combobox"]'
-  );
-
+  const elements = queryDeep(FIELD_SELECTOR);
   const fields: any[] = [];
 
   elements.forEach((el, index) => {
@@ -187,23 +249,26 @@ function scanFields() {
 
     const typeAttr = element.getAttribute('type') || '';
     const roleAttr = element.getAttribute('role') || '';
-    const isRadioOrCheckbox = 
-      typeAttr === 'radio' || typeAttr === 'checkbox' || 
-      roleAttr === 'radio' || roleAttr === 'checkbox';
+    const isRadioOrCheckbox =
+      typeAttr === 'radio' || typeAttr === 'checkbox' ||
+      roleAttr === 'radio' || roleAttr === 'checkbox' || roleAttr === 'switch';
+    const isEditable = element.hasAttribute('contenteditable');
+
+    // A field we cannot write to is noise in the review list.
+    if ((element as HTMLInputElement).disabled || (element as HTMLInputElement).readOnly) return;
+    if (element.getAttribute('aria-disabled') === 'true') return;
 
     // Skip invisible elements, but allow hidden native radios/checkboxes commonly used by UI frameworks
-    if (!isRadioOrCheckbox) {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      if (rect.width === 0 && rect.height === 0) return;
-      if (style.display === 'none' || style.visibility === 'hidden') return;
-    }
+    if (!isRadioOrCheckbox && !isVisible(element)) return;
 
-    const type = element.type || roleAttr || element.tagName.toLowerCase();
+    const tagName = isEditable && element.tagName !== 'TEXTAREA' && element.tagName !== 'INPUT'
+      ? 'contenteditable'
+      : element.tagName.toLowerCase();
+    const type = isEditable ? 'textarea' : (element.type || roleAttr || tagName);
     let label = findLabel(element).replace(/^[_*.\-=\s]+|[_*.\-=\s]+$/g, '').trim();
-    
+
     // Only group-map context for non-standalone components like checkboxes or radio buttons
-    // UNLESS the field has a highly generic label (like "Your answer", "Hour", "Minute", "Day") 
+    // UNLESS the field has a highly generic label (like "Your answer", "Hour", "Minute", "Day")
     // which signifies it's part of a composite or poorly-labeled group.
     const isGeneric = !label || ['your answer', 'hour', 'minute', 'am', 'pm', 'am/pm', 'time', 'date', 'month', 'year', 'day', 'choose'].includes(label.toLowerCase()) || label.length < 4;
 
@@ -217,41 +282,56 @@ function scanFields() {
     const name = element.getAttribute('name') || '';
     const placeholder = element.getAttribute('placeholder') || '';
     const ariaLabel = element.getAttribute('aria-label') || '';
+    const autocomplete = element.getAttribute('autocomplete') || '';
+    const section = findSection(element);
+    const required = element.hasAttribute('required') || element.getAttribute('aria-required') === 'true';
 
     // Extract options for select elements or ARIA listboxes
     let options: string[] | undefined;
     if (element.tagName === 'SELECT') {
       options = Array.from((element as HTMLSelectElement).options).map((o) => o.text);
     } else if (roleAttr === 'listbox' || roleAttr === 'combobox') {
-      const opts = Array.from(element.querySelectorAll('[role="option"]'));
-      if (opts.length > 0) {
-        options = opts.map(o => o.textContent || '');
-      } else {
-        // Some frameworks append options dynamically, but we can look for siblings or data attributes if needed.
-        // If empty, the AI will just guess based on standard dropdown values.
-      }
+      const listId = element.getAttribute('aria-controls') || element.getAttribute('aria-owns');
+      const list = listId ? document.getElementById(listId) : null;
+      const opts = Array.from((list ?? element).querySelectorAll('[role="option"]'));
+      if (opts.length > 0) options = opts.map(o => (o.textContent || '').trim()).filter(Boolean);
+    } else if (element.getAttribute('list')) {
+      // <input list="…"> backed by a <datalist>
+      const dl = document.getElementById(element.getAttribute('list')!);
+      const opts = Array.from(dl?.querySelectorAll('option') ?? []);
+      if (opts.length > 0) options = opts.map(o => o.textContent || (o as HTMLOptionElement).value);
     }
 
     const fieldId = `ff-${index}-${Date.now()}`;
     element.setAttribute('data-formpilot-id', fieldId);
 
     const generatedSelector = generateSelector(element);
+    const category = inferCategory(label, type, name, autocomplete);
+
+    // Whatever is already typed into a password, card or OTP box stays on the
+    // page. It is read only to decide the field is occupied — the value itself
+    // never reaches the popup, the model, or storage.
+    const rawValue = isEditable ? (element.textContent || '') : (element.value || '');
+    const sensitive = isSensitiveField({ category, type, label, name, autocomplete });
 
     fields.push({
       id: `field-${index}-${Date.now()}`,
       fieldId,
       selector: generatedSelector,
       fallbackSelector: generatedSelector,
-      tagName: element.tagName.toLowerCase(),
+      tagName,
       type,
       label,
       placeholder,
       name,
       ariaLabel,
-      currentValue: element.value || '',
+      autocomplete,
+      section,
+      required,
+      currentValue: sensitive ? '' : rawValue,
       suggestedValue: '',
       confidence: 0,
-      category: inferCategory(label, type, name),
+      category,
       status: 'pending',
       options,
     });
@@ -260,18 +340,23 @@ function scanFields() {
   return fields;
 }
 
+// Exposed on the isolated world so the popup can run one scan per frame via
+// chrome.scripting.executeScript({ allFrames: true }) — chrome.tabs.sendMessage
+// only ever delivers one frame's answer back.
+(globalThis as any).__formpilotScan = () => ({ fields: scanFields(), context: getPageContext() });
+
 // ─── Fill a single field ───
 function fillField(fieldId: string | undefined, selector: string, fallbackSelector: string | undefined, value: string, tagName: string) {
   let element: HTMLElement | null = null;
-  
+
   if (fieldId) {
-    try { element = document.querySelector(`[data-formpilot-id="${fieldId}"]`) as HTMLElement | null; } catch(e) {}
+    try { element = findDeep(`[data-formpilot-id="${fieldId}"]`) as HTMLElement | null; } catch(e) {}
   }
   if (!element) {
-    try { element = document.querySelector(selector) as HTMLElement | null; } catch(e) {}
+    try { element = findDeep(selector) as HTMLElement | null; } catch(e) {}
   }
   if (!element && fallbackSelector) {
-    try { element = document.querySelector(fallbackSelector) as HTMLElement | null; } catch(e) {}
+    try { element = findDeep(fallbackSelector) as HTMLElement | null; } catch(e) {}
   }
 
   if (!element) {
@@ -288,17 +373,28 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
     const optionByValue = Array.from(select.options).find(
       (o) => o.value.toLowerCase() === value.toLowerCase()
     );
+    // Exact text match first — "India" must not land on "Indiana".
+    const optionByExactText = Array.from(select.options).find(
+      (o) => o.text.trim().toLowerCase() === value.trim().toLowerCase()
+    );
     const optionByText = Array.from(select.options).find(
       (o) => o.text.toLowerCase().includes(value.toLowerCase())
     );
-    const match = optionByValue || optionByText;
-    if (match) {
-      select.value = match.value;
-      select.dispatchEvent(new Event('focus', { bubbles: true }));
-      select.dispatchEvent(new Event('input', { bubbles: true }));
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      select.dispatchEvent(new Event('blur', { bubbles: true }));
-    }
+    const match = optionByValue || optionByExactText || optionByText;
+    if (!match) return false;
+    select.value = match.value;
+    select.dispatchEvent(new Event('focus', { bubbles: true }));
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    select.dispatchEvent(new Event('blur', { bubbles: true }));
+  } else if (tagName === 'contenteditable') {
+    // Rich-text editors (Notion-style, Quill, ProseMirror) read from the DOM,
+    // not from .value, and listen for input events to sync their model.
+    element.dispatchEvent(new Event('focus', { bubbles: true }));
+    element.textContent = value;
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
   } else if (tagName === 'textarea') {
     element.dispatchEvent(new Event('focus', { bubbles: true }));
     const nativeSetter = Object.getOwnPropertyDescriptor(
@@ -315,7 +411,7 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
     element.dispatchEvent(new Event('blur', { bubbles: true }));
   } else if (
     (tagName === 'input' && ((element as HTMLInputElement).type === 'checkbox' || (element as HTMLInputElement).type === 'radio')) ||
-    (element.getAttribute('role') === 'checkbox' || element.getAttribute('role') === 'radio')
+    ['checkbox', 'radio', 'switch'].includes(element.getAttribute('role') || '')
   ) {
     let isChecked = ['true', 'yes', 'on', 'checked'].includes(value.toLowerCase());
     if (tagName === 'input') {
@@ -336,10 +432,10 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
   } else if (element.getAttribute('role') === 'listbox' || element.getAttribute('role') === 'combobox') {
     // Attempt to open the custom dropdown by clicking it
     element.click();
-    
+
     // Custom dropdown options are often rendered dynamically at the end of the body when opened!
     setTimeout(() => {
-      const options = Array.from(document.querySelectorAll('[role="option"]')) as HTMLElement[];
+      const options = queryDeep('[role="option"]') as HTMLElement[];
       // Find exact or closest match.
       const match = options.find(o => o.textContent && o.textContent.toLowerCase().includes(value.toLowerCase()));
       if (match) {
@@ -372,15 +468,77 @@ function fillField(fieldId: string | undefined, selector: string, fallbackSelect
 // ─── Highlight fields ───
 function highlightFields(selectors: string[]) {
   selectors.forEach((sel) => {
-    const el = document.querySelector(sel);
-    if (el) el.classList.add('formpilot-highlight');
+    const el = findDeep(sel);
+    if (el) {
+      el.classList.add('formpilot-highlight');
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   });
 }
 
 function clearHighlights() {
-  document.querySelectorAll('.formpilot-highlight, .formpilot-filled, .formpilot-scanning').forEach((el) => {
+  queryDeep('.formpilot-highlight, .formpilot-filled, .formpilot-scanning').forEach((el) => {
     el.classList.remove('formpilot-highlight', 'formpilot-filled', 'formpilot-scanning');
   });
+}
+
+// ─── Learning: watch what the user types ───
+// The extension only ever learns from a finished edit (change/blur), never
+// keystroke by keystroke, and the background drops anything sensitive.
+let lastLearned = '';
+function observeInput(event: Event) {
+  const el = event.target as HTMLInputElement | null;
+  if (!el || !el.tagName) return;
+  if (el.tagName === 'INPUT' && ['password', 'hidden', 'file'].includes(el.type)) return;
+
+  const value = (el.isContentEditable ? el.textContent : el.value)?.trim() ?? '';
+  if (!value || value.length > 400) return;
+
+  const label = findLabel(el).replace(/^[_*.\-=\s]+|[_*.\-=\s]+$/g, '').trim();
+  const name = el.getAttribute('name') || '';
+  const type = el.type || el.tagName.toLowerCase();
+  const autocomplete = el.getAttribute('autocomplete') || '';
+  const category = inferCategory(label, type, name, autocomplete);
+
+  // Judged here, before the value crosses the message port. The background
+  // filters again, but a secret should never leave the frame it was typed in.
+  if (isSensitiveField({ category, type, label, name, autocomplete })) return;
+  if (SENSITIVE_VALUE.test(value)) return;
+
+  const signature = `${label}|${name}|${value}`;
+  if (signature === lastLearned) return;
+  lastLearned = signature;
+
+  chrome.runtime.sendMessage({
+    type: 'OBSERVE_FIELD',
+    field: { label, name, type, autocomplete, placeholder: el.getAttribute('placeholder') || '', category },
+    value,
+    domain: location.hostname,
+  }).catch(() => {});
+}
+
+document.addEventListener('change', observeInput, true);
+document.addEventListener('focusout', observeInput, true);
+
+// ─── Live field count → toolbar badge ───
+// Tells the user a page is fillable before they ever open the popup, and keeps
+// up with forms that appear after load (SPAs, multi-step checkouts).
+let countTimer: number | undefined;
+function reportFieldCount() {
+  clearTimeout(countTimer);
+  countTimer = setTimeout(() => {
+    // ponytail: light-DOM only. The badge is a hint, and a full shadow-piercing
+    // walk every time a busy SPA mutates costs more than the hint is worth —
+    // the real scan still goes deep. Switch to queryDeep if the count on
+    // web-component-heavy sites ever misleads people.
+    const count = Array.from(document.querySelectorAll(FIELD_SELECTOR)).filter(isVisible).length;
+    chrome.runtime.sendMessage({ type: 'FIELD_COUNT', count }).catch(() => {});
+  }, 600) as unknown as number;
+}
+
+if (window.top === window) {
+  reportFieldCount();
+  new MutationObserver(reportFieldCount).observe(document.documentElement, { childList: true, subtree: true });
 }
 
 // ─── Message listener ───
@@ -392,8 +550,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     case 'SCAN_FIELDS': {
-      const fields = scanFields();
-      sendResponse({ fields });
+      sendResponse({ fields: scanFields(), context: getPageContext() });
       break;
     }
     case 'FILL_FIELD': {
@@ -416,36 +573,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
     }
-    case 'PROCEED_TO_NEXT_PAGE': {
-      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn, a.button')) as HTMLElement[];
-      const nextBtn = buttons.find(b => {
-          const text = (b.textContent || (b as HTMLInputElement).value || '').toLowerCase().trim();
-          return text === 'next' || text === 'continue' || text.includes('next page');
-      });
-      if (nextBtn) {
-          nextBtn.click();
-          sendResponse({ success: true, clicked: true });
-      } else {
-          sendResponse({ success: true, clicked: false });
-      }
-      break;
-    }
   }
   return false; // all responses are synchronous
-});
-
-// ─── Auto-scan on page load (for popup to detect) ───
-// MutationObserver for SPA form detection
-const observer = new MutationObserver(() => {
-  // Notify popup that DOM changed (new fields may be available)
-  try {
-    chrome.runtime.sendMessage({ type: 'DOM_CHANGED' });
-  } catch {
-    // Popup may not be open
-  }
-});
-
-observer.observe(document.body, {
-  childList: true,
-  subtree: true,
 });

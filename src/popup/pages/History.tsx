@@ -3,6 +3,13 @@ import { History as HistoryIcon, Search, ExternalLink, Calendar, MapPin, Trash2,
 import type { FillHistoryEntry } from '../../shared/types';
 import { getHistory, clearHistory } from '../../shared/storage';
 
+// Stable per-domain colour so entries stay visually distinguishable.
+function domainHue(domain: string): number {
+  let hash = 0;
+  for (let i = 0; i < domain.length; i++) hash = (hash * 31 + domain.charCodeAt(i)) % 360;
+  return hash;
+}
+
 export default function HistoryPage() {
   const [history, setHistory] = useState<FillHistoryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -98,10 +105,14 @@ export default function HistoryPage() {
             >
               <div className="flex justify-between items-start mb-2">
                 <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded bg-[#27272a] flex items-center justify-center shrink-0">
-                    <img src={`https://www.google.com/s2/favicons?domain=${entry.domain}&sz=32`} alt="" className="w-4 h-4" onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOWI5NWE4IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiPjwvY2lyY2xlPjwvc3ZnPg==';
-                    }} />
+                  {/* Drawn locally. Fetching a favicon from an external
+                      service would hand that service a list of every site the
+                      user fills forms on. */}
+                  <div
+                    className="w-6 h-6 rounded flex items-center justify-center shrink-0 text-[11px] font-bold uppercase"
+                    style={{ backgroundColor: `hsl(${domainHue(entry.domain)} 60% 22%)`, color: `hsl(${domainHue(entry.domain)} 70% 70%)` }}
+                  >
+                    {entry.domain.replace(/^www\./, '').charAt(0) || '?'}
                   </div>
                   <h3 className="font-semibold text-sm truncate max-w-[200px] text-white group-hover:text-primary-400 transition-colors">
                     {entry.domain}

@@ -1,5 +1,7 @@
-import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry } from './types';
-import { DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS } from './constants';
+import type { Profile, Settings, FillHistoryEntry, PaymentCard, PasswordEntry, SyncState } from './types';
+import {
+  DEFAULT_PROFILES, DEFAULT_SETTINGS, STORAGE_KEYS, PROVIDERS, RETIRED_MODEL_IDS,
+} from './constants.ts';
 
 // ─── Chrome storage detection ───
 const isChromeStorage =
@@ -8,7 +10,7 @@ const isChromeStorage =
   typeof chrome.storage.local !== 'undefined';
 
 // ─── Generic get/set with fallback to localStorage ───
-async function getItem<T>(key: string): Promise<T | null> {
+export async function getItem<T>(key: string): Promise<T | null> {
   if (isChromeStorage) {
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (result) => {
@@ -20,13 +22,65 @@ async function getItem<T>(key: string): Promise<T | null> {
   return raw ? JSON.parse(raw) : null;
 }
 
-async function setItem<T>(key: string, value: T): Promise<void> {
+export async function setItem<T>(key: string, value: T): Promise<void> {
+  await writeItem(key, value);
+  // One hook, every write path. Doing this per-caller guarantees that the one
+  // caller nobody remembered silently stops syncing.
+  if (SYNCED_KEYS.includes(key)) await markDirty();
+}
+
+/* Writes without flagging the store dirty. Only sync uses this: applying the
+   merged result is not a local edit, and treating it as one makes every sync
+   schedule the next one forever. */
+export async function setItemQuietly<T>(key: string, value: T): Promise<void> {
+  await writeItem(key, value);
+}
+
+async function writeItem<T>(key: string, value: T): Promise<void> {
   if (isChromeStorage) {
     return new Promise((resolve) => {
       chrome.storage.local.set({ [key]: value }, resolve);
     });
   }
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+export async function removeItem(key: string): Promise<void> {
+  if (isChromeStorage) {
+    return new Promise((resolve) => chrome.storage.local.remove(key, () => resolve()));
+  }
+  localStorage.removeItem(key);
+}
+
+/* ─── Sync bookkeeping ───
+   Lives here rather than in sync.ts so that every write path is covered by one
+   hook instead of each caller remembering to flag itself, and so the two files
+   do not import each other in a circle. */
+
+// Collections that ride along to the server. A write to any of them means this
+// device is ahead and owes the server a push.
+const SYNCED_KEYS: string[] = [
+  STORAGE_KEYS.PROFILES, STORAGE_KEYS.SETTINGS, STORAGE_KEYS.HISTORY,
+  STORAGE_KEYS.PAYMENT_CARDS, STORAGE_KEYS.PASSWORDS, STORAGE_KEYS.MEMORY,
+];
+
+/** Flags that local data has moved ahead of the server copy. */
+export async function markDirty(): Promise<void> {
+  const state = await getItem<SyncState>(STORAGE_KEYS.SYNC_STATE);
+  if (state?.pendingSince) return; // already queued
+  await setItem(STORAGE_KEYS.SYNC_STATE, {
+    email: '', userId: '', lastSyncedAt: 0, remoteUpdatedAt: 0,
+    ...(state ?? {}),
+    pendingSince: Date.now(),
+  });
+}
+
+/** Records that a record was deleted, so the delete survives the next merge. */
+export async function recordDeletion(...ids: string[]): Promise<void> {
+  const tombstones = (await getItem<Record<string, number>>(STORAGE_KEYS.TOMBSTONES)) ?? {};
+  const now = Date.now();
+  for (const id of ids) if (id) tombstones[id] = now;
+  await setItem(STORAGE_KEYS.TOMBSTONES, tombstones);
 }
 
 // ─── Profiles ───
@@ -59,14 +113,46 @@ export async function updateProfile(updated: Profile): Promise<Profile[]> {
 export async function deleteProfile(profileId: string): Promise<Profile[]> {
   let profiles = await getProfiles();
   profiles = profiles.filter((p) => p.id !== profileId);
+  await recordDeletion(profileId);
   await saveProfiles(profiles);
   return profiles;
 }
 
 // ─── Settings ───
+// v1 stored one hardcoded field per provider (openaiApiKey, groqModel, …).
+// v2 keys them by provider id so a new provider is a table entry, not a schema
+// change. Existing installs are migrated on read.
+function migrateSettings(saved: any): Settings {
+  const merged: any = { ...DEFAULT_SETTINGS, ...saved };
+  merged.providers = { ...(saved?.providers ?? {}) };
+
+  for (const id of Object.keys(PROVIDERS)) {
+    const legacyKey = saved?.[`${id}ApiKey`];
+    const legacyModel = saved?.[`${id}Model`];
+    if (legacyKey || legacyModel) {
+      merged.providers[id] = {
+        apiKey: merged.providers[id]?.apiKey || legacyKey || '',
+        model: merged.providers[id]?.model || legacyModel || '',
+        baseUrl: merged.providers[id]?.baseUrl,
+      };
+    }
+    delete merged[`${id}ApiKey`];
+    delete merged[`${id}Model`];
+  }
+
+  // Retired model ids (claude-3-7-sonnet, mixtral-8x7b, …) 404 at the provider.
+  // Only clear ids we know are stale — a free-typed OpenRouter/NIM id is valid
+  // even though it is not in our suggestion list.
+  for (const [id, cfg] of Object.entries(merged.providers as Record<string, any>)) {
+    if (RETIRED_MODEL_IDS.includes(cfg?.model)) cfg.model = PROVIDERS[id]?.models[0] ?? '';
+  }
+  if (!PROVIDERS[merged.aiProvider]) merged.aiProvider = DEFAULT_SETTINGS.aiProvider;
+  return merged as Settings;
+}
+
 export async function getSettings(): Promise<Settings> {
-  const settings = await getItem<Settings>(STORAGE_KEYS.SETTINGS);
-  return settings ?? DEFAULT_SETTINGS;
+  const settings = await getItem<any>(STORAGE_KEYS.SETTINGS);
+  return settings ? migrateSettings(settings) : DEFAULT_SETTINGS;
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
@@ -87,6 +173,10 @@ export async function addHistoryEntry(entry: FillHistoryEntry): Promise<void> {
   await setItem(STORAGE_KEYS.HISTORY, history);
 }
 
+export async function saveHistory(history: FillHistoryEntry[]): Promise<void> {
+  await setItem(STORAGE_KEYS.HISTORY, history);
+}
+
 export async function clearHistory(): Promise<void> {
   await setItem(STORAGE_KEYS.HISTORY, []);
 }
@@ -97,8 +187,9 @@ export function generateId(): string {
 }
 
 // ─── Payment Cards ───
-// No encryption needed — chrome.storage.local is sandboxed to this extension only
-// and never synced to any external server.
+// Stored as plaintext in chrome.storage.local, which is sandboxed to this
+// extension. When sync is enabled these are encrypted before upload (crypto.ts)
+// — the server never sees them in the clear.
 export async function getPaymentCards(): Promise<PaymentCard[]> {
   const cards = await getItem<PaymentCard[]>(STORAGE_KEYS.PAYMENT_CARDS);
   return cards ?? [];
@@ -116,12 +207,13 @@ export async function addPaymentCard(card: PaymentCard): Promise<void> {
 
 export async function deletePaymentCard(id: string): Promise<void> {
   const cards = await getPaymentCards();
+  await recordDeletion(id);
   await savePaymentCards(cards.filter((c) => c.id !== id));
 }
 
 // ─── Passwords ───
-// No encryption needed — chrome.storage.local is sandboxed to this extension only
-// and never synced to any external server.
+// Same storage model as payment cards above: local plaintext, encrypted in
+// transit and at rest on the server when sync is on.
 export async function getPasswords(): Promise<PasswordEntry[]> {
   const entries = await getItem<PasswordEntry[]>(STORAGE_KEYS.PASSWORDS);
   return entries ?? [];
@@ -139,6 +231,7 @@ export async function addPassword(entry: PasswordEntry): Promise<void> {
 
 export async function deletePassword(id: string): Promise<void> {
   const entries = await getPasswords();
+  await recordDeletion(id);
   await savePasswords(entries.filter((e) => e.id !== id));
 }
 

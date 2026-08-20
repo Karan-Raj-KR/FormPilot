@@ -1,0 +1,23 @@
+name = "formpilot-sync"
+main = "index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Must match the OAuth client ID used by the extension — a token minted for any
+# other client is rejected. Leave blank to run email-only.
+GOOGLE_CLIENT_ID = ""
+APP_NAME = "FormPilot"
+
+# Set to "1" to return one-time codes in the HTTP response instead of relying on
+# email. Local development only — never deploy with this on.
+DEV_ECHO_CODES = "0"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "formpilot"
+database_id = ""   # from: npx wrangler d1 create formpilot
+
+# ─── Secrets (never put these in this file) ───
+# npx wrangler secret put SALT_PEPPER      # any long random string
+# npx wrangler secret put RESEND_API_KEY   # from resend.com
+# npx wrangler secret put MAIL_FROM        # e.g. "FormPilot <login@yourdomain.com>"
