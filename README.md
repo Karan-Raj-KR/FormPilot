@@ -13,7 +13,7 @@
 
 ### 🥇 1st place — Open Loop 2026 · 121 teams · 109 colleges · 14 states
 
-[![Chrome Web Store](https://img.shields.io/badge/Install_from_Chrome_Web_Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](YOUR_STORE_URL_HERE)
+[![Chrome Web Store](https://img.shields.io/badge/Install_from_Chrome_Web_Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)]([YOUR_STORE_URL_HERE](https://chromewebstore.google.com/detail/ffkpekcnpbafklidejfbhinahahaabfi?utm_source=item-share-cb))
 
 </div>
 
