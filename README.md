@@ -9,6 +9,13 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+<div align="center">
+
+### 🥇 1st place — Open Loop 2026 · 121 teams · 109 colleges · 14 states
+
+[![Chrome Web Store](https://img.shields.io/badge/Install_from_Chrome_Web_Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](YOUR_STORE_URL_HERE)
+
+</div>
 
 **Stop typing. Start doing.**
 
